@@ -1,0 +1,75 @@
+name: DevSecOps - Security Scans (CI)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Wrapper workflow for DVNA.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: ["master", "main"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      ENABLE_SEMGREP:
+        description: "Run Semgrep SAST?"
+        required: false
+        default: "true"
+      ENABLE_TRIVY_FS:
+        description: "Run Trivy filesystem scan?"
+        required: false
+        default: "true"
+      ENABLE_TRIVY_IMAGE:
+        description: "Run Trivy image scan?"
+        required: false
+        default: "true"
+      ENABLE_ZAP:
+        description: "Run OWASP ZAP DAST scan?"
+        required: false
+        default: "true"
+
+jobs:
+  security-scans:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 120
+
+    env:
+      ENABLE_SEMGREP:     ${{ github.event.inputs.ENABLE_SEMGREP     || 'true' }}
+      ENABLE_TRIVY_FS:    ${{ github.event.inputs.ENABLE_TRIVY_FS    || 'true' }}
+      ENABLE_TRIVY_IMAGE: ${{ github.event.inputs.ENABLE_TRIVY_IMAGE || 'true' }}
+      ENABLE_ZAP:         ${{ github.event.inputs.ENABLE_ZAP         || 'true' }}
+
+    steps:
+      - name: Checkout app repository
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - name: Checkout VulnPriority (central CI/CD repo)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/VulnPriority
+          path: vulnpriority
+
+      - name: Run DevSecOps pipeline
+        shell: bash
+        env:
+          DOJO_TOKEN: ${{ secrets.DOJO_TOKEN }}
+        run: |
+          bash vulnpriority/ci-cd-security/scripts/run_pipeline.sh \
+            vulnpriority/ci-cd-security/products/dvna/product.env \
+            "$GITHUB_WORKSPACE/app"
+
+      - name: Upload scan reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "ci-scan-results-dvna-${{ github.run_id }}"
+          path: "/tmp/devsecops-scans/${{ github.run_id }}/"
+          if-no-files-found: ignore
+
+      - name: Cleanup scan directory
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "/tmp/devsecops-scans/${{ github.run_id }}" || true
+          docker network rm zapnet 2>/dev/null || true
