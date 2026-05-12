@@ -1,5 +1,9 @@
 name: DevSecOps - Security Scans (CI)
 
+concurrency:
+  group: devsecops-local-runner
+  cancel-in-progress: false
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Wrapper workflow for NodeGoat.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -8,6 +12,7 @@ on:
   push:
     branches: ["master", "main"]
   pull_request:
+    branches: ["master", "main"]
   workflow_dispatch:
     inputs:
       ENABLE_SEMGREP:
@@ -71,5 +76,8 @@ jobs:
         if: always()
         shell: bash
         run: |
-          rm -rf "/tmp/devsecops-scans/${{ github.run_id }}" || true
-          docker network rm zapnet 2>/dev/null || true
+          set -a
+          source vulnpriority/ci-cd-security/products/nodegoat/product.env
+          set +a
+          export RUN_OUTPUT_DIR="/tmp/devsecops-scans/${{ github.run_id }}"
+          bash vulnpriority/ci-cd-security/scripts/cleanup.sh
