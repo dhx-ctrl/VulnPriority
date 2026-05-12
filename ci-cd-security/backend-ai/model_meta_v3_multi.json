@@ -1,0 +1,50 @@
+{
+  "model_version": "3.2",
+  "model_type": "XGBClassifier (multiclass)",
+  "trained_on": "master_training_dataset_v3_merged.csv",
+  "objective": "multi:softprob",
+  "num_classes": 4,
+  "class_map": {
+    "0": "Low",
+    "1": "Medium",
+    "2": "High",
+    "3": "Critical"
+  },
+  "cv_f1_macro": 0.9544,
+  "cv_f1_macro_std": 0.0048,
+  "split": {
+    "train_size": 3491,
+    "val_size": 1164,
+    "test_size": 1164,
+    "ratio": "60/20/20"
+  },
+  "features": [
+    "cvss_score",
+    "year",
+    "attack_vector",
+    "attack_complexity",
+    "privileges_required",
+    "user_interaction",
+    "scope",
+    "confidentiality_impact",
+    "integrity_impact",
+    "availability_impact",
+    "cwe_top",
+    "scanner_type",
+    "has_cve",
+    "is_static",
+    "is_dynamic"
+  ],
+  "leakage_excluded": [
+    "epss",
+    "epss_percentile",
+    "epss_score"
+  ],
+  "class_weight": "balanced (sample_weight per-class during training)",
+  "output": "predict_proba() -> [P_Low, P_Med, P_High, P_Crit]",
+  "notes": "Severity as target. Uses all rows with cvss_score filled. No EPSS data required. Low class handled with balanced sample_weight.",
+  "training_date": "2026-05-09T17:15:58.751226Z",
+  "python_version": "3.12.10",
+  "xgboost_version": "3.2.0",
+  "platform": "Windows"
+}

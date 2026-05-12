@@ -1,0 +1,61 @@
+{
+  "model_version": "3.2",
+  "model_type": "XGBClassifier (binary)",
+  "trained_on": "master_training_dataset_v3_merged.csv",
+  "label_threshold": 0.01,
+  "optimal_threshold": 0.2464,
+  "optimal_threshold_note": "Selected on VALIDATION set \u2014 not test set",
+  "roc_auc_test": 0.8305,
+  "roc_auc_val": 0.8083,
+  "cv_roc_auc": 0.8331,
+  "cv_roc_auc_std": 0.0218,
+  "precision_at_threshold": 0.3486,
+  "recall_at_threshold": 0.8608,
+  "confusion_matrix": {
+    "tn": 520,
+    "fp": 312,
+    "fn": 27,
+    "tp": 167
+  },
+  "split": {
+    "train_size": 3076,
+    "val_size": 1026,
+    "test_size": 1026,
+    "ratio": "60/20/20"
+  },
+  "features": [
+    "cvss_score",
+    "year",
+    "attack_vector",
+    "attack_complexity",
+    "privileges_required",
+    "user_interaction",
+    "scope",
+    "confidentiality_impact",
+    "integrity_impact",
+    "availability_impact",
+    "cwe_top",
+    "scanner_type",
+    "has_cve",
+    "is_static",
+    "is_dynamic"
+  ],
+  "leakage_excluded": [
+    "epss",
+    "epss_percentile",
+    "epss_score"
+  ],
+  "label_meaning": "1 = EPSS >= 0.01 (High Risk), 0 = Low Risk",
+  "output": "predict_proba()[:,1] -> exploit_probability (0-1)",
+  "ai_risk_score": "exploit_probability x 100",
+  "risk_categories": {
+    "Low": "0-29",
+    "Medium": "30-69",
+    "High": "70-100"
+  },
+  "notes": "Use optimal_threshold for production alerts. Use 0.5 + ROC-AUC for comparing model versions.",
+  "training_date": "2026-05-09T17:15:27.713415Z",
+  "python_version": "3.12.10",
+  "xgboost_version": "3.2.0",
+  "platform": "Windows"
+}
