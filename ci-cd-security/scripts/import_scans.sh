@@ -87,9 +87,34 @@ fi
 
 # Strip leading whitespace (heredoc indentation) AND trailing \r (Windows CRLF).
 META_CLEAN="$(mktemp "${SAFE_TMP_DIR}/scan_meta_XXXXXX.env")"
-sed -e 's/^[[:space:]]*//' -e 's/
-$//' "$META_FILE" > "$META_CLEAN"
+# Strip leading whitespace and normalize Windows CRLF safely.
+# Avoid sed here because literal CR characters can break sed expressions in CI.
+META_CLEAN="$(mktemp "${SAFE_TMP_DIR}/scan_meta_XXXXXX.env")"
+python3 - "$META_FILE" "$META_CLEAN" <<'PY'
+import sys
+
+src, dst = sys.argv[1], sys.argv[2]
+
+with open(src, "rb") as f:
+    text = f.read().decode("utf-8-sig", errors="replace")
+
+lines = []
+for line in text.splitlines():
+    line = line.lstrip()
+    if not line or line.startswith("#"):
+        continue
+    lines.append(line)
+
+with open(dst, "w", encoding="utf-8", newline="\n") as f:
+    f.write("\n".join(lines) + "\n")
+PY
+
 chmod 600 "$META_CLEAN" 2>/dev/null || true
+# shellcheck disable=SC1091
+set -a
+source "$META_CLEAN"
+set +a
+rm -f "$META_CLEAN"chmod 600 "$META_CLEAN" 2>/dev/null || true
 # shellcheck disable=SC1091
 set -a          # auto-export every variable assigned from here on
 source "$META_CLEAN"
