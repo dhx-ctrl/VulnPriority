@@ -49,6 +49,32 @@ fi
 # Prevent accidental shell command tracing from exposing curl headers.
 set +x
 
+# Use a private temp directory instead of global /tmp files.
+# This avoids leaking metadata / API responses on shared self-hosted runners.
+SAFE_TMP_BASE="${RUNNER_TEMP:-${RUN_OUTPUT_DIR:-/tmp}}"
+SAFE_TMP_DIR="${SAFE_TMP_BASE}/vulnpriority-${GITHUB_RUN_ID:-manual}"
+mkdir -p "$SAFE_TMP_DIR"
+chmod 700 "$SAFE_TMP_DIR" 2>/dev/null || true
+
+cleanup_tmp() {
+  rm -rf "$SAFE_TMP_DIR" 2>/dev/null || true
+}
+trap cleanup_tmp EXIT
+
+# Redact secrets before printing any API error body.
+redact_secrets() {
+  python3 -c '
+import os, re, sys
+text = sys.stdin.read()
+for key in ("DOJO_TOKEN", "DEFECTDOJO_API_KEY"):
+    val = os.environ.get(key, "")
+    if val:
+        text = text.replace(val, "***REDACTED_SECRET***")
+text = re.sub(r"Token\s+[A-Za-z0-9._:-]+", "Token ***REDACTED***", text)
+print(text, end="")
+'
+}
+
 ###############################################################################
 #  1. Load scan metadata written by CI
 ###############################################################################
@@ -60,12 +86,15 @@ if [[ ! -f "$META_FILE" ]]; then
 fi
 
 # Strip leading whitespace (heredoc indentation) AND trailing \r (Windows CRLF).
-sed -e 's/^[[:space:]]*//' -e 's/\r$//' "$META_FILE" > /tmp/_scan_meta_clean.env
+META_CLEAN="$(mktemp "${SAFE_TMP_DIR}/scan_meta_XXXXXX.env")"
+sed -e 's/^[[:space:]]*//' -e 's/
+$//' "$META_FILE" > "$META_CLEAN"
+chmod 600 "$META_CLEAN" 2>/dev/null || true
 # shellcheck disable=SC1091
 set -a          # auto-export every variable assigned from here on
-source /tmp/_scan_meta_clean.env
+source "$META_CLEAN"
 set +a          # stop auto-exporting
-rm -f /tmp/_scan_meta_clean.env
+rm -f "$META_CLEAN"
 
 ###############################################################################
 #  2. Validate required env vars
@@ -172,7 +201,7 @@ curl_dd() {
   local label="$1"; shift
   local tmp http_code body
 
-  tmp=$(mktemp /tmp/dojo_curl_XXXXXX.json)
+  tmp=$(mktemp "${SAFE_TMP_DIR}/dojo_curl_XXXXXX.json")
 
   http_code=$(curl -sS -w "%{http_code}" -o "$tmp" "$@") || {
     echo "ERROR [${label}]: curl network/TLS error (exit $?)" >&2
@@ -184,7 +213,7 @@ curl_dd() {
 
   if [[ "${http_code}" -ge 400 ]]; then
     echo "ERROR [${label}]: DefectDojo returned HTTP ${http_code}" >&2
-    echo "  Body: ${body:0:1200}" >&2
+    echo "  Body: $(printf '%s' "${body:0:1200}" | redact_secrets)" >&2
     return 1
   fi
 
@@ -213,7 +242,7 @@ log_import_response() {
   local label="$1"
   local response="$2"
   local tmp
-  tmp=$(mktemp /tmp/dojo_resp_XXXXXX.json)
+  tmp=$(mktemp "${SAFE_TMP_DIR}/dojo_resp_XXXXXX.json")
   printf '%s' "$response" > "$tmp"
   python3 "$(dirname "$0")/dojo_log_response.py" "$label" "$tmp"
   rm -f "$tmp"
@@ -224,13 +253,14 @@ log_import_response() {
 ###############################################################################
 
 echo "Checking DefectDojo connectivity..."
-http_code=$(curl -o /tmp/dojo_check.txt -sS -w "%{http_code}" \
+DOJO_CHECK_FILE="${SAFE_TMP_DIR}/dojo_check.txt"
+http_code=$(curl -o "$DOJO_CHECK_FILE" -sS -w "%{http_code}" \
   -H "Authorization: Token ${DOJO_TOKEN}" \
   "${DOJO_URL}/api/v2/users/?limit=1")
 
 if [[ "$http_code" != "200" ]]; then
   echo "ERROR: DefectDojo returned HTTP $http_code — check DOJO_URL / DOJO_TOKEN"
-  cat /tmp/dojo_check.txt
+  cat "$DOJO_CHECK_FILE" | redact_secrets
   exit 1
 fi
 echo "DefectDojo reachable (HTTP $http_code)"
@@ -294,7 +324,7 @@ print(json.dumps({
   pt_id=$(printf '%s' "$created" | extract_id)
   if [[ -z "$pt_id" ]]; then
     echo "ERROR: product-type creation returned no ID" >&2
-    echo "  Response: ${created:0:500}" >&2
+    echo "  Response: $(printf '%s' "${created:0:500}" | redact_secrets)" >&2
     return 1
   fi
 
@@ -364,7 +394,7 @@ print(json.dumps({
   product_id=$(printf '%s' "$created" | extract_id)
   if [[ -z "$product_id" ]]; then
     echo "ERROR: product creation returned no ID" >&2
-    echo "  Response: ${created:0:500}" >&2
+    echo "  Response: $(printf '%s' "${created:0:500}" | redact_secrets)" >&2
     return 1
   fi
 
@@ -394,7 +424,7 @@ get_or_create_engagement() {
   encoded_name=$(urlencode "$eng_name")
   encoded_product=$(urlencode "$product_id")
 
-  tmp=$(mktemp /tmp/dojo_eng_XXXXXX.json)
+  tmp=$(mktemp "${SAFE_TMP_DIR}/dojo_eng_XXXXXX.json")
   http_code=$(curl -sS -w "%{http_code}" -o "$tmp" \
     -H "Authorization: Token ${DOJO_TOKEN}" \
     "${DOJO_URL}/api/v2/engagements/?name=${encoded_name}&product=${encoded_product}&limit=1")
@@ -406,7 +436,7 @@ get_or_create_engagement() {
     # ── Step B: fallback — product-only filter + client-side name match ──
     echo "  WARN: combined filter returned HTTP ${http_code}, falling back to product-only..." >&2
 
-    tmp=$(mktemp /tmp/dojo_eng_XXXXXX.json)
+    tmp=$(mktemp "${SAFE_TMP_DIR}/dojo_eng_XXXXXX.json")
     http_code=$(curl -sS -w "%{http_code}" -o "$tmp" \
       -H "Authorization: Token ${DOJO_TOKEN}" \
       "${DOJO_URL}/api/v2/engagements/?product=${encoded_product}&limit=200")
@@ -414,7 +444,7 @@ get_or_create_engagement() {
 
     if [[ "${http_code}" -ge 400 ]]; then
       echo "ERROR: engagement fallback lookup returned HTTP ${http_code}" >&2
-      echo "  Body: ${body:0:800}" >&2
+      echo "  Body: $(printf '%s' "${body:0:800}" | redact_secrets)" >&2
       return 1
     fi
 
@@ -499,7 +529,7 @@ print(json.dumps({
   engagement_id=$(printf '%s' "$created" | extract_id)
   if [[ -z "$engagement_id" ]]; then
     echo "ERROR: engagement creation returned no ID" >&2
-    echo "  Response: ${created:0:500}" >&2
+    echo "  Response: $(printf '%s' "${created:0:500}" | redact_secrets)" >&2
     return 1
   fi
 
@@ -544,6 +574,11 @@ import_or_reimport() {
   local min_sev="$3"
   local mime="$4"
   local label="$5"
+
+  if [[ ! -f "$file_path" ]]; then
+    echo "ERROR: scan file not found: $file_path" >&2
+    exit 1
+  fi
 
   local test_title="${APP_NAME} - ${label}"
 
