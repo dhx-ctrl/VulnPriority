@@ -85,8 +85,6 @@ if [[ ! -f "$META_FILE" ]]; then
   exit 1
 fi
 
-# Strip leading whitespace (heredoc indentation) AND trailing \r (Windows CRLF).
-META_CLEAN="$(mktemp "${SAFE_TMP_DIR}/scan_meta_XXXXXX.env")"
 # Strip leading whitespace and normalize Windows CRLF safely.
 # Avoid sed here because literal CR characters can break sed expressions in CI.
 META_CLEAN="$(mktemp "${SAFE_TMP_DIR}/scan_meta_XXXXXX.env")"
