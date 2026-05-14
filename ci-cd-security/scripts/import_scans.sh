@@ -1,37 +1,5 @@
 #!/usr/bin/env bash
 # import_scans.sh — Import/reimport security-scan results into DefectDojo.
-#
-# ═══════════════════════════════════════════════════════════════════════
-# HOW IT WORKS
-# ═══════════════════════════════════════════════════════════════════════
-#
-#   1. Loads scan_meta.env (written by the CI workflow) to learn
-#      APP_NAME and which scanners ran.
-#
-#   2. Resolves (or creates) the full DefectDojo hierarchy by NAME:
-#
-#        Product Type  →  "CI-CD Apps"        (DOJO_PRODUCT_TYPE_NAME)
-#        Product       →  APP_NAME            (DOJO_PRODUCT_NAME)
-#        Engagement    →  "DevSecOps-CICD"    (DOJO_ENGAGEMENT_NAME)
-#
-#      No numeric IDs are needed anywhere in configuration.
-#
-#   3. For each enabled scanner whose output file exists:
-#        – If a Test with the same title already exists → reimport-scan
-#        – Otherwise → import-scan (first run)
-#
-# ═══════════════════════════════════════════════════════════════════════
-# TEST-TITLE NAMESPACING
-# ═══════════════════════════════════════════════════════════════════════
-#
-#   Every test title is prefixed with APP_NAME:
-#     "juiceshop - Semgrep SAST"
-#     "dvwa - Trivy Image"
-#
-#   This prevents findings from different apps colliding even when
-#   they share the same Product or Engagement.
-#
-# ═══════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
 
@@ -50,7 +18,6 @@ fi
 set +x
 
 # Use a private temp directory instead of global /tmp files.
-# This avoids leaking metadata / API responses on shared self-hosted runners.
 SAFE_TMP_BASE="${RUNNER_TEMP:-${RUN_OUTPUT_DIR:-/tmp}}"
 SAFE_TMP_DIR="${SAFE_TMP_BASE}/vulnpriority-${GITHUB_RUN_ID:-manual}"
 mkdir -p "$SAFE_TMP_DIR"
@@ -85,39 +52,77 @@ if [[ ! -f "$META_FILE" ]]; then
   exit 1
 fi
 
-# Strip leading whitespace and normalize Windows CRLF safely.
-# Avoid sed here because literal CR characters can break sed expressions in CI.
-META_CLEAN="$(mktemp "${SAFE_TMP_DIR}/scan_meta_XXXXXX.env")"
-python3 - "$META_FILE" "$META_CLEAN" <<'PY'
+# Securely load scan_meta.env:
+# - no global /tmp metadata file
+# - no raw source of untrusted env
+# - only whitelisted keys accepted
+# - Windows CRLF normalized
+# - values shell-quoted with shlex.quote
+set -a
+# shellcheck disable=SC1090
+source <(
+  python3 - "$META_FILE" <<'PY'
 import sys
+import shlex
 
-src, dst = sys.argv[1], sys.argv[2]
+src = sys.argv[1]
+
+allowed = {
+    "APP_NAME",
+    "APP_URL",
+    "DOCKER_IMAGE_NAME",
+    "ENABLE_SEMGREP",
+    "ENABLE_TRIVY_FS",
+    "ENABLE_TRIVY_IMAGE",
+    "ENABLE_ZAP",
+    "REQUIRE_SEMGREP",
+    "REQUIRE_TRIVY_FS",
+    "REQUIRE_TRIVY_IMAGE",
+    "REQUIRE_ZAP",
+    "GIT_COMMIT",
+    "GIT_BRANCH",
+    "BUILD_ID",
+    "COMMIT_HASH",
+    "BRANCH_TAG",
+    "REPO_URI",
+    "TEST_STRATEGY",
+    "DOJO_PRODUCT_NAME",
+}
 
 with open(src, "rb") as f:
     text = f.read().decode("utf-8-sig", errors="replace")
 
-lines = []
-for line in text.splitlines():
-    line = line.lstrip()
-    if not line or line.startswith("#"):
+for raw_line in text.splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
         continue
-    lines.append(line)
 
-with open(dst, "w", encoding="utf-8", newline="\n") as f:
-    f.write("\n".join(lines) + "\n")
+    key, value = line.split("=", 1)
+    key = key.strip()
+    value = value.strip()
+
+    if key not in allowed:
+        continue
+
+    print(f"{key}={shlex.quote(value)}")
 PY
-
-chmod 600 "$META_CLEAN" 2>/dev/null || true
-# shellcheck disable=SC1091
-set -a
-source "$META_CLEAN"
+)
 set +a
-rm -f "$META_CLEAN"chmod 600 "$META_CLEAN" 2>/dev/null || true
-# shellcheck disable=SC1091
-set -a          # auto-export every variable assigned from here on
-source "$META_CLEAN"
-set +a          # stop auto-exporting
-rm -f "$META_CLEAN"
+
+# Backward-compatible fallbacks from scan_meta.env / GitHub env
+BUILD_ID="${BUILD_ID:-${GITHUB_RUN_ID:-manual}}"
+COMMIT_HASH="${COMMIT_HASH:-${GIT_COMMIT:-unknown}}"
+BRANCH_TAG="${BRANCH_TAG:-${GIT_BRANCH:-unknown}}"
+
+if [[ -z "${REPO_URI:-}" ]]; then
+  if [[ -n "${GITHUB_SERVER_URL:-}" && -n "${GITHUB_REPOSITORY:-}" ]]; then
+    REPO_URI="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+  else
+    REPO_URI="unknown"
+  fi
+fi
+
+TEST_STRATEGY="${TEST_STRATEGY:-Automated CI/CD security scan import}"
 
 ###############################################################################
 #  2. Validate required env vars
@@ -131,6 +136,7 @@ required_vars=(
   BUILD_ID  COMMIT_HASH  BRANCH_TAG  REPO_URI  TEST_STRATEGY
   RUN_OUTPUT_DIR  APP_NAME
 )
+
 for v in "${required_vars[@]}"; do
   if [[ -z "${!v:-}" ]]; then
     echo "ERROR: Required variable missing or empty: $v"
@@ -169,14 +175,10 @@ echo "════════════════════════�
 #  HELPER FUNCTIONS
 ###############################################################################
 
-# ── urlencode ────────────────────────────────────────────────────────────
 urlencode() {
   python3 -c "import sys; from urllib.parse import quote; print(quote(sys.argv[1], safe=''))" "$1"
 }
 
-# ── extract_first_id ─────────────────────────────────────────────────────
-# Parse a DD list response { "results": [ { "id": N }, … ] }
-# and print the first id, or empty string if none.
 extract_first_id() {
   python3 -c "
 import json, sys
@@ -193,8 +195,6 @@ print(results[0].get('id', '') if results else '')
 "
 }
 
-# ── extract_id ───────────────────────────────────────────────────────────
-# Parse a DD single-object response { "id": N, … } and print the id.
 extract_id() {
   python3 -c "
 import json, sys
@@ -210,16 +210,6 @@ print(data.get('id', ''))
 "
 }
 
-# ── curl_dd ──────────────────────────────────────────────────────────────
-# Wraps every DefectDojo API call.
-#
-# Why not --fail-with-body?
-#   curl silently discards the response body on 4xx/5xx, so you never
-#   see WHAT DefectDojo complained about.  This wrapper captures the
-#   body to a temp file, checks the HTTP status, and prints the full
-#   error message to stderr before returning non-zero.
-#
-# Usage:  response=$(curl_dd "label" [curl-args...])
 curl_dd() {
   local label="$1"; shift
   local tmp http_code body
@@ -232,7 +222,8 @@ curl_dd() {
     return 1
   }
 
-  body=$(cat "$tmp"); rm -f "$tmp"
+  body=$(cat "$tmp")
+  rm -f "$tmp"
 
   if [[ "${http_code}" -ge 400 ]]; then
     echo "ERROR [${label}]: DefectDojo returned HTTP ${http_code}" >&2
@@ -243,8 +234,6 @@ curl_dd() {
   printf '%s' "$body"
 }
 
-# ── metadata_json ────────────────────────────────────────────────────────
-# Build the JSON payload for engagement metadata fields.
 metadata_json() {
   python3 -c "
 import json, os
@@ -259,12 +248,11 @@ print(json.dumps({
 "
 }
 
-# ── log_import_response ──────────────────────────────────────────────────
-# Delegates to dojo_log_response.py for a structured one-line summary.
 log_import_response() {
   local label="$1"
   local response="$2"
   local tmp
+
   tmp=$(mktemp "${SAFE_TMP_DIR}/dojo_resp_XXXXXX.json")
   printf '%s' "$response" > "$tmp"
   python3 "$(dirname "$0")/dojo_log_response.py" "$label" "$tmp"
@@ -277,22 +265,22 @@ log_import_response() {
 
 echo "Checking DefectDojo connectivity..."
 DOJO_CHECK_FILE="${SAFE_TMP_DIR}/dojo_check.txt"
+
 http_code=$(curl -o "$DOJO_CHECK_FILE" -sS -w "%{http_code}" \
   -H "Authorization: Token ${DOJO_TOKEN}" \
   "${DOJO_URL}/api/v2/users/?limit=1")
 
 if [[ "$http_code" != "200" ]]; then
   echo "ERROR: DefectDojo returned HTTP $http_code — check DOJO_URL / DOJO_TOKEN"
-  cat "$DOJO_CHECK_FILE" | redact_secrets
+  redact_secrets < "$DOJO_CHECK_FILE"
   exit 1
 fi
+
 echo "DefectDojo reachable (HTTP $http_code)"
 
 ###############################################################################
 #  PRODUCT TYPE — get or create
 ###############################################################################
-# Searches by name.  Creates if not found.
-# Prints the product-type ID to stdout.
 
 get_or_create_product_type() {
   local pt_name="$1"
@@ -307,7 +295,6 @@ get_or_create_product_type() {
     "${DOJO_URL}/api/v2/product_types/?name=${encoded_name}&limit=10") \
     || { echo "ERROR: product-type lookup failed" >&2; return 1; }
 
-  # DD name filter is a substring match, so we must exact-match client-side.
   local pt_id
   pt_id=$(printf '%s' "$response" | PT_NAME="$pt_name" python3 -c "
 import json, sys, os
@@ -325,15 +312,12 @@ for r in data.get('results', []):
     return 0
   fi
 
-  # ── Create ────────────────────────────────────────────────────────────
   echo "  Product Type '${pt_name}' not found — creating..." >&2
 
   local payload
   payload=$(PT_NAME="$pt_name" python3 -c "
 import json, os
-print(json.dumps({
-    'name': os.environ['PT_NAME'],
-}))
+print(json.dumps({'name': os.environ['PT_NAME']}))
 ")
 
   local created
@@ -358,8 +342,6 @@ print(json.dumps({
 ###############################################################################
 #  PRODUCT — get or create
 ###############################################################################
-# Searches by exact name.  Creates under the given product-type ID.
-# Prints the product ID to stdout.
 
 get_or_create_product() {
   local prod_name="$1"
@@ -375,7 +357,6 @@ get_or_create_product() {
     "${DOJO_URL}/api/v2/products/?name=${encoded_name}&limit=10") \
     || { echo "ERROR: product lookup failed" >&2; return 1; }
 
-  # DD name filter is substring — exact-match client-side.
   local product_id
   product_id=$(printf '%s' "$response" | PROD_NAME="$prod_name" python3 -c "
 import json, sys, os
@@ -393,7 +374,6 @@ for r in data.get('results', []):
     return 0
   fi
 
-  # ── Create ────────────────────────────────────────────────────────────
   echo "  Product '${prod_name}' not found — creating (prod_type=${prod_type_id})..." >&2
 
   local payload
@@ -428,11 +408,6 @@ print(json.dumps({
 ###############################################################################
 #  ENGAGEMENT — get or create
 ###############################################################################
-# Searches by name + product.  Creates if not found.
-# Prints the engagement ID to stdout.
-#
-# Some DD versions reject the combined name+product filter with HTTP 400.
-# Fallback: query by product only, then match the name client-side.
 
 get_or_create_engagement() {
   local eng_name="$1"
@@ -441,8 +416,6 @@ get_or_create_engagement() {
   echo "Looking up Engagement '${eng_name}' in product ${product_id}..." >&2
 
   local engagement_id=""
-
-  # ── Step A: combined name+product filter ─────────────────────────────
   local encoded_name encoded_product tmp http_code body
   encoded_name=$(urlencode "$eng_name")
   encoded_product=$(urlencode "$product_id")
@@ -451,19 +424,20 @@ get_or_create_engagement() {
   http_code=$(curl -sS -w "%{http_code}" -o "$tmp" \
     -H "Authorization: Token ${DOJO_TOKEN}" \
     "${DOJO_URL}/api/v2/engagements/?name=${encoded_name}&product=${encoded_product}&limit=1")
-  body=$(cat "$tmp"); rm -f "$tmp"
+  body=$(cat "$tmp")
+  rm -f "$tmp"
 
   if [[ "$http_code" == "200" ]]; then
     engagement_id=$(printf '%s' "$body" | extract_first_id)
   else
-    # ── Step B: fallback — product-only filter + client-side name match ──
     echo "  WARN: combined filter returned HTTP ${http_code}, falling back to product-only..." >&2
 
     tmp=$(mktemp "${SAFE_TMP_DIR}/dojo_eng_XXXXXX.json")
     http_code=$(curl -sS -w "%{http_code}" -o "$tmp" \
       -H "Authorization: Token ${DOJO_TOKEN}" \
       "${DOJO_URL}/api/v2/engagements/?product=${encoded_product}&limit=200")
-    body=$(cat "$tmp"); rm -f "$tmp"
+    body=$(cat "$tmp")
+    rm -f "$tmp"
 
     if [[ "${http_code}" -ge 400 ]]; then
       echo "ERROR: engagement fallback lookup returned HTTP ${http_code}" >&2
@@ -480,24 +454,23 @@ print(match['id'] if match else '')
 ")
   fi
 
-  # ── Found — update metadata and return ─────────────────────────────
   if [[ -n "$engagement_id" ]]; then
     echo "  Found Engagement '${eng_name}' → ID ${engagement_id}" >&2
     echo "  Patching engagement metadata..." >&2
+
     curl_dd "engagement-patch" -X PATCH \
       "${DOJO_URL}/api/v2/engagements/${engagement_id}/" \
       -H "Authorization: Token ${DOJO_TOKEN}" \
       -H "Content-Type: application/json" \
       -d "$(metadata_json)" > /dev/null \
       || { echo "ERROR: engagement metadata patch failed" >&2; return 1; }
+
     echo "$engagement_id"
     return 0
   fi
 
-  # ── Create ────────────────────────────────────────────────────────────
   echo "  Engagement '${eng_name}' not found — creating..." >&2
 
-  # Look up the engagement lead user.
   local encoded_lead lead_payload lead_id
   encoded_lead=$(urlencode "$DOJO_ENGAGEMENT_LEAD_USERNAME")
 
@@ -563,7 +536,6 @@ print(json.dumps({
 ###############################################################################
 #  TEST LOOKUP
 ###############################################################################
-# Find an existing test by scan_type + title inside the engagement.
 
 find_existing_test() {
   local scan_type="$1"
@@ -584,12 +556,6 @@ find_existing_test() {
 ###############################################################################
 #  IMPORT / REIMPORT A SINGLE SCAN
 ###############################################################################
-# Args:
-#   $1  scan_type   — DD parser name  (e.g. "Trivy Scan")
-#   $2  file_path   — path to scan output file
-#   $3  min_sev     — minimum severity (e.g. "Low")
-#   $4  mime        — MIME type
-#   $5  label       — human label (prefixed with APP_NAME automatically)
 
 import_or_reimport() {
   local scan_type="$1"
@@ -611,6 +577,7 @@ import_or_reimport() {
   local response
   if [[ -n "$test_id" ]]; then
     echo "Reimporting (test ${test_id}) [${test_title}]: ${scan_type} <- ${file_path}"
+
     response=$(curl_dd "reimport [${test_title}]" -X POST \
       "${DOJO_URL}/api/v2/reimport-scan/" \
       -H "Authorization: Token ${DOJO_TOKEN}" \
@@ -628,6 +595,7 @@ import_or_reimport() {
       || { echo "ERROR: reimport-scan failed for [${test_title}]" >&2; exit 1; }
   else
     echo "Importing (first run) [${test_title}]: ${scan_type} <- ${file_path}"
+
     response=$(curl_dd "import [${test_title}]" -X POST \
       "${DOJO_URL}/api/v2/import-scan/" \
       -H "Authorization: Token ${DOJO_TOKEN}" \
@@ -650,8 +618,6 @@ import_or_reimport() {
 ###############################################################################
 #  GATE — check a scan file before importing
 ###############################################################################
-# Returns 0 (proceed) or 1 (skip).  Aborts the script if REQUIRE is true
-# and the file is missing.
 
 check_scan_file() {
   local scanner="$1"
@@ -684,12 +650,11 @@ check_scan_file() {
 ###############################################################################
 
 echo "RUN_OUTPUT_DIR=${RUN_OUTPUT_DIR}"
+
 if [[ ! -d "$RUN_OUTPUT_DIR" ]]; then
   echo "ERROR: RUN_OUTPUT_DIR does not exist: $RUN_OUTPUT_DIR"
   exit 1
 fi
-
-# ── Step 1: Product Type ──────────────────────────────────────────────────
 
 DOJO_PRODUCT_TYPE_ID=$(get_or_create_product_type "$DOJO_PRODUCT_TYPE_NAME")
 if [[ -z "$DOJO_PRODUCT_TYPE_ID" ]]; then
@@ -698,8 +663,6 @@ if [[ -z "$DOJO_PRODUCT_TYPE_ID" ]]; then
 fi
 echo "Product Type ID : ${DOJO_PRODUCT_TYPE_ID}"
 
-# ── Step 2: Product ───────────────────────────────────────────────────────
-
 DOJO_PRODUCT_ID=$(get_or_create_product "$DOJO_PRODUCT_NAME" "$DOJO_PRODUCT_TYPE_ID")
 if [[ -z "$DOJO_PRODUCT_ID" ]]; then
   echo "ERROR: Failed to resolve Product"
@@ -707,8 +670,6 @@ if [[ -z "$DOJO_PRODUCT_ID" ]]; then
 fi
 export DOJO_PRODUCT_ID
 echo "Product ID      : ${DOJO_PRODUCT_ID}"
-
-# ── Step 3: Engagement ────────────────────────────────────────────────────
 
 DOJO_ENGAGEMENT_ID=$(get_or_create_engagement "$DOJO_ENGAGEMENT_NAME" "$DOJO_PRODUCT_ID")
 if [[ -z "$DOJO_ENGAGEMENT_ID" ]]; then
@@ -721,9 +682,6 @@ echo "Engagement ID   : ${DOJO_ENGAGEMENT_ID}"
 echo ""
 ls -la "${RUN_OUTPUT_DIR}"
 echo ""
-
-# ── Step 4: Import each scanner's output ──────────────────────────────────
-# Using explicit if-blocks so import errors are NOT silently swallowed.
 
 if check_scan_file "semgrep" "${RUN_OUTPUT_DIR}/semgrep.json" "$ENABLE_SEMGREP" "$REQUIRE_SEMGREP"; then
   import_or_reimport "${SCAN_TYPE_SEMGREP}" "${RUN_OUTPUT_DIR}/semgrep.json" "Low" "application/json" "Semgrep SAST"
