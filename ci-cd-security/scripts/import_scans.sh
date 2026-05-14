@@ -35,6 +35,20 @@
 
 set -euo pipefail
 
+# ─────────────────────────────────────────────────────────────
+# Security: mask secrets in GitHub Actions logs
+# ─────────────────────────────────────────────────────────────
+if [[ -n "${DOJO_TOKEN:-}" ]]; then
+  echo "::add-mask::${DOJO_TOKEN}"
+fi
+
+if [[ -n "${DEFECTDOJO_API_KEY:-}" ]]; then
+  echo "::add-mask::${DEFECTDOJO_API_KEY}"
+fi
+
+# Prevent accidental shell command tracing from exposing curl headers.
+set +x
+
 ###############################################################################
 #  1. Load scan metadata written by CI
 ###############################################################################
