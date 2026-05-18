@@ -11,7 +11,6 @@ services:
       - "8000:8000"
     volumes:
       - vulnpriority_db:/app/data
-      - ./backend-ai/ai_scores.db:/app/ai_scores.db
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
