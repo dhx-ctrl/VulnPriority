@@ -1,18 +1,62 @@
-# Environment secrets
+# ============================================================
+# BACKEND SECRETS
+# ============================================================
+
 .env
 .env.*
 !.env.example
 
-# Local database
-ai_scores.db
+# ============================================================
+# LOCAL SQLITE DATABASE
+# ============================================================
 
-# Python
+ai_scores.db
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================================================
+# PYTHON CACHE / VENV
+# ============================================================
+
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+
 .venv/
 venv/
-.pytest_cache/
+env/
+ENV/
 
-# Node
-node_modules/
-dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ============================================================
+# LOCAL LOGS / TEMP
+# ============================================================
+
+*.log
+tmp/
+.temp/
+*.tmp
+
+# ============================================================
+# RAW DATASETS
+# ============================================================
+
+data/raw/
+data/*.zip
+data/*.jsonl
+data/*.parquet
+data/*.csv
+
+# ============================================================
+# NOTE:
+# Do NOT ignore these final model folders:
+# model_output_FINAL_clean_minimal_features/
+# model_output_EPSS_operational_ranker/
+# They are needed for the backend to run.
+# ============================================================
