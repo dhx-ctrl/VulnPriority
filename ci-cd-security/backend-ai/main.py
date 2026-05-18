@@ -72,7 +72,7 @@ log = logging.getLogger("devsecops_ai")
 # ══════════════════════════════════════════════════════════════════════════════
 
 BASE_DIR = Path(__file__).parent
-DB_PATH  = BASE_DIR / "ai_scores.db"
+DB_PATH  = DB_PATH = Path(os.getenv("DB_PATH", str(BASE_DIR / "ai_scores.db")))
 
 # DefectDojo connection – read from .env
 DEFECTDOJO_URL        = os.getenv("DEFECTDOJO_URL", "").rstrip("/")
