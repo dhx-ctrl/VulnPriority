@@ -1,0 +1,115 @@
+# ============================================================
+# SECRETS / ENV FILES
+# ============================================================
+
+.env
+.env.*
+!.env.example
+
+**/.env
+**/.env.*
+!**/.env.example
+
+*secret*
+*secrets*
+*token*
+*apikey*
+*api_key*
+
+# ============================================================
+# LOCAL DATABASES
+# ============================================================
+
+*.db
+*.sqlite
+*.sqlite3
+backend-ai/ai_scores.db
+
+# ============================================================
+# PYTHON
+# ============================================================
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+.venv/
+venv/
+env/
+ENV/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ============================================================
+# NODE / FRONTEND
+# ============================================================
+
+node_modules/
+frontend-dashboard/node_modules/
+
+dist/
+frontend-dashboard/dist/
+
+.vite/
+frontend-dashboard/.vite/
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ============================================================
+# DOCKER / LOCAL RUNTIME
+# ============================================================
+
+docker-data/
+volumes/
+
+# ============================================================
+# SCAN OUTPUTS / TEMP FILES
+# ============================================================
+
+scan-results/
+scan-output/
+reports/tmp/
+tmp/
+.temp/
+*.tmp
+*.log
+
+# ============================================================
+# LARGE RAW DATASETS
+# keep final model artifacts, but ignore raw downloaded datasets
+# ============================================================
+
+backend-ai/data/raw/
+backend-ai/data/*.zip
+backend-ai/data/*.jsonl
+backend-ai/data/*.parquet
+backend-ai/data/*.csv
+
+# If you have final small processed CSVs you want to commit,
+# force-add them manually or move them to benchmark_results/.
+
+# ============================================================
+# OS / EDITOR
+# ============================================================
+
+.DS_Store
+Thumbs.db
+
+.vscode/
+.idea/
+
+# ============================================================
+# OLD / LOCAL BACKUPS
+# ============================================================
+
+*.bak
+*.backup
+*.old
+*.orig
