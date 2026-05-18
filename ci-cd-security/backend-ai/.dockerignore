@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+env/
+.git/
+.gitignore
+
+*.log
+.DS_Store
+
+# Keep the SQLite DB out of the image.
+# Docker Compose will mount it through a volume.
+ai_scores.db
+
+# Keep local caches out.
+.cache/
+.ipynb_checkpoints/
