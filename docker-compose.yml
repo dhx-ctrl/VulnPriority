@@ -1,0 +1,30 @@
+services:
+  backend-ai:
+    build:
+      context: ./backend-ai
+      dockerfile: Dockerfile
+    container_name: vulnpriority-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend-ai/.env
+    ports:
+      - "8000:8000"
+    volumes:
+      - vulnpriority_db:/app/data
+      - ./backend-ai/ai_scores.db:/app/ai_scores.db
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend-dashboard:
+    build:
+      context: ./frontend-dashboard
+      dockerfile: Dockerfile
+    container_name: vulnpriority-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend-ai
+    ports:
+      - "5173:80"
+
+volumes:
+  vulnpriority_db:
