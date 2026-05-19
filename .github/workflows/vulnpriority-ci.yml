@@ -26,14 +26,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: ci-cd-security/frontend-dashboard/package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm install --include=dev --no-audit --no-fund
 
       - name: Build React dashboard
-        run: npm run build
+        run: npx vite build
 
   backend-tests:
     name: Backend smoke tests
@@ -88,8 +86,8 @@ jobs:
       - name: Build frontend dist for Docker context
         working-directory: ci-cd-security/frontend-dashboard
         run: |
-          npm ci
-          npm run build
+          npm install --include=dev --no-audit --no-fund
+          npx vite build
           test -d dist
 
       - name: Build Docker images
