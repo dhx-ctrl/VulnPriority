@@ -1,30 +1,28 @@
 {
   "model_type": "XGBoost EPSS-only operational ranking classifier",
-  "model_version": "epss-operational-ranker-v1",
-  "created_at_utc": "2026-05-17T18:19:24.078789+00:00",
+  "model_version": "epss-operational-ranker-v2-leakage-hardened",
+  "created_at_utc": "2026-05-19T12:13:31.542047+00:00",
   "input_file": "C:\\Users\\user\\Downloads\\ya raby temchi nchlh\\dataset_merged\\merged_trainable.csv",
   "label_mode": "epss_only",
-  "epss_threshold_for_label_only": 0.05,
+  "epss_threshold_for_label_only": 0.1,
   "target_precision": 0.7,
-  "optimal_threshold": 0.911769449710846,
+  "optimal_threshold": 0.8905047178268433,
   "threshold_selection": {
     "mode": "target_precision",
-    "validation_precision": 0.7272727272727273,
-    "validation_recall": 0.09876543209876543
+    "validation_precision": 1.0,
+    "validation_recall": 0.008849557522123894
   },
   "rows_loaded": 7114,
   "rows_labeled_used": 5726,
-  "positive_rows": 441,
-  "negative_rows": 5285,
-  "scale_pos_weight": 12.232727272727272,
-  "split_kind_train_test": "group",
-  "split_kind_train_val": "group",
+  "positive_rows": 312,
+  "negative_rows": 5414,
+  "scale_pos_weight": 18.18848167539267,
+  "split_kind_train_test": "temporal",
+  "split_kind_train_val": "temporal",
   "numeric_feature_count": 20,
-  "categorical_feature_count": 13,
+  "categorical_feature_count": 10,
   "feature_columns_before_preprocessing": [
-    "package_name",
     "cvss_score",
-    "cvss_vector",
     "attack_vector",
     "attack_complexity",
     "privileges_required",
@@ -53,10 +51,14 @@
     "feat_withdrawn_year",
     "feat_days_since_withdrawn",
     "feat_package_len",
-    "feat_is_scoped_package",
-    "feat_package_scope"
+    "feat_is_scoped_package"
   ],
   "leakage_policy": {
+    "removed_v2": [
+      "package_name (high-cardinality memorisation)",
+      "cvss_vector (redundant with parsed components, near-unique)",
+      "feat_package_scope (ecosystem-level memorisation)"
+    ],
     "removed_direct_label_signals": [
       "epss_score",
       "epss_percentile",
@@ -67,67 +69,116 @@
       "cvss_score",
       "cvss subcomponents"
     ],
-    "important_note": "This EPSS-only model may use CVSS as an input because CVSS is not used to define the EPSS target label."
+    "cwe_bucketing": "top-30 CWE families + OTHER",
+    "important_note": "CVSS is allowed because it is not used to define the EPSS target label."
   },
   "validation_metrics": {
-    "threshold": 0.911769449710846,
-    "accuracy": 0.9188900747065102,
-    "precision": 0.7272727272727273,
-    "recall": 0.09876543209876543,
-    "f1": 0.17391304347826086,
-    "aucpr": 0.3665782015296168,
-    "roc_auc": 0.7839217722395291,
-    "tn": 853,
-    "fp": 3,
-    "fn": 73,
-    "tp": 8
+    "threshold": 0.8905047178268433,
+    "accuracy": 0.8777292576419214,
+    "precision": 1.0,
+    "recall": 0.008849557522123894,
+    "f1": 0.017543859649122806,
+    "aucpr": 0.17911341751551774,
+    "roc_auc": 0.6153969076141461,
+    "tn": 803,
+    "fp": 0,
+    "fn": 112,
+    "tp": 1
   },
   "test_metrics": {
-    "threshold": 0.911769449710846,
-    "accuracy": 0.922608695652174,
-    "precision": 0.35714285714285715,
-    "recall": 0.058823529411764705,
-    "f1": 0.10101010101010101,
-    "aucpr": 0.2802317633170258,
-    "roc_auc": 0.8243413421706711,
-    "tn": 1056,
-    "fp": 9,
-    "fn": 80,
-    "tp": 5
+    "threshold": 0.8905047178268433,
+    "accuracy": 0.9930131004366812,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "aucpr": 0.058167207785605406,
+    "roc_auc": 0.7639621811785401,
+    "tn": 1137,
+    "fp": 0,
+    "fn": 8,
+    "tp": 0
   },
   "ranking_comparison_test": {
-    "ai_aucpr": 0.2802317633170258,
-    "ai_roc_auc": 0.8243413421706711,
-    "ai_ndcg": 0.7533252020275196,
-    "ai_needed_for_80pct": 431,
-    "ai_precision_at_10": 0.4,
-    "ai_recall_at_10": 0.047058823529411764,
-    "ai_hits_at_10": 4,
-    "ai_precision_at_20": 0.3,
-    "ai_recall_at_20": 0.07058823529411765,
-    "ai_hits_at_20": 6,
-    "ai_precision_at_50": 0.32,
-    "ai_recall_at_50": 0.18823529411764706,
-    "ai_hits_at_50": 16,
-    "ai_precision_at_100": 0.34,
-    "ai_recall_at_100": 0.4,
-    "ai_hits_at_100": 34,
-    "cvss_aucpr": 0.11759042690656524,
-    "cvss_roc_auc": 0.6176801988400995,
-    "cvss_ndcg": 0.6063942910784462,
-    "cvss_needed_for_80pct": 733,
-    "cvss_precision_at_10": 0.1,
-    "cvss_recall_at_10": 0.011764705882352941,
-    "cvss_hits_at_10": 1,
-    "cvss_precision_at_20": 0.15,
-    "cvss_recall_at_20": 0.03529411764705882,
-    "cvss_hits_at_20": 3,
-    "cvss_precision_at_50": 0.16,
-    "cvss_recall_at_50": 0.09411764705882353,
-    "cvss_hits_at_50": 8,
-    "cvss_precision_at_100": 0.16,
-    "cvss_recall_at_100": 0.18823529411764706,
-    "cvss_hits_at_100": 16,
-    "coverage_80pct_change_vs_cvss_pct": -41.20054570259209
+    "ai_aucpr": 0.058167207785605406,
+    "ai_roc_auc": 0.7639621811785401,
+    "ai_ndcg": 0.35098797516472835,
+    "ai_needed_for_80pct": 441,
+    "ai_precision_at_10": 0.1,
+    "ai_recall_at_10": 0.125,
+    "ai_hits_at_10": 1,
+    "ai_precision_at_20": 0.1,
+    "ai_recall_at_20": 0.25,
+    "ai_hits_at_20": 2,
+    "ai_precision_at_50": 0.04,
+    "ai_recall_at_50": 0.25,
+    "ai_hits_at_50": 2,
+    "ai_precision_at_100": 0.03,
+    "ai_recall_at_100": 0.375,
+    "ai_hits_at_100": 3,
+    "cvss_aucpr": 0.015838753663154834,
+    "cvss_roc_auc": 0.5739885664028145,
+    "cvss_ndcg": 0.2714972228056818,
+    "cvss_needed_for_80pct": 1053,
+    "cvss_precision_at_10": 0.0,
+    "cvss_recall_at_10": 0.0,
+    "cvss_hits_at_10": 0,
+    "cvss_precision_at_20": 0.0,
+    "cvss_recall_at_20": 0.0,
+    "cvss_hits_at_20": 0,
+    "cvss_precision_at_50": 0.02,
+    "cvss_recall_at_50": 0.125,
+    "cvss_hits_at_50": 1,
+    "cvss_precision_at_100": 0.03,
+    "cvss_recall_at_100": 0.375,
+    "cvss_hits_at_100": 3,
+    "coverage_80pct_change_vs_cvss_pct": -58.119658119658126
+  },
+  "diagnostics": {
+    "label_shuffle_sanity": {
+      "shuffled_roc_auc": 0.6041116974494284,
+      "shuffled_aucpr": 0.02901070209127206
+    },
+    "permutation_importance_top10": {
+      "feat_days_since_modified": {
+        "mean_auc_drop": 0.057915567282321966,
+        "std_auc_drop": 0.008566849780381941
+      },
+      "feat_cwe_family": {
+        "mean_auc_drop": 0.03298153034300799,
+        "std_auc_drop": 0.01200576028099508
+      },
+      "summary_len": {
+        "mean_auc_drop": 0.02713280562884792,
+        "std_auc_drop": 0.03375932764918167
+      },
+      "confidentiality_impact": {
+        "mean_auc_drop": 0.012642919964819787,
+        "std_auc_drop": 0.013513218078017626
+      },
+      "feat_package_len": {
+        "mean_auc_drop": 0.006420404573438931,
+        "std_auc_drop": 0.008611373079183849
+      },
+      "feat_is_scoped_package": {
+        "mean_auc_drop": 0.0035620052770448662,
+        "std_auc_drop": 0.001221455093432826
+      },
+      "cvss_score": {
+        "mean_auc_drop": 0.0020228671943712364,
+        "std_auc_drop": 0.03547872546334472
+      },
+      "scope": {
+        "mean_auc_drop": 0.0007915567282322123,
+        "std_auc_drop": 0.0004078108397315395
+      },
+      "has_patch_ref": {
+        "mean_auc_drop": 0.0005496921723835202,
+        "std_auc_drop": 0.0016716427272426082
+      },
+      "user_interaction": {
+        "mean_auc_drop": 0.0003957783641161283,
+        "std_auc_drop": 0.0013019236009751075
+      }
+    }
   }
 }

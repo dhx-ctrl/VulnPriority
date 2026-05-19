@@ -1,7 +1,5 @@
 [
-  "package_name",
   "cvss_score",
-  "cvss_vector",
   "attack_vector",
   "attack_complexity",
   "privileges_required",
@@ -30,6 +28,5 @@
   "feat_withdrawn_year",
   "feat_days_since_withdrawn",
   "feat_package_len",
-  "feat_is_scoped_package",
-  "feat_package_scope"
+  "feat_is_scoped_package"
 ]

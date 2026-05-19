@@ -1,36 +1,45 @@
 #!/usr/bin/env python3
 """
-Train an EPSS-only operational ranking model.
+Train an EPSS-only operational ranking model — v2 (leakage-hardened).
 
-Purpose
--------
-This is NOT the strict scientific minimal model.
-This is an operational ranker designed to compete with CVSS on EPSS-proxy labels.
+Changes from v1
+----------------
+1.  Dropped `package_name` as a direct feature (high-cardinality one-hot
+    memorises per-package EPSS base-rates).  Derived features
+    `feat_package_len` and `feat_is_scoped_package` are kept (low-cardinality,
+    legitimate signal).
+2.  Dropped `cvss_vector` raw string (redundant with parsed sub-components,
+    near-unique categories → memorisation).
+3.  Dropped `feat_package_scope` (npm scope strings memorise ecosystem-level
+    EPSS patterns).
+4.  `feat_cwe_family` bucketed to top-N families + "OTHER" to reduce
+    memorisation via rare CWE IDs.
+5.  Added `--temporal-split` flag: train on older CVEs, test on newer ones
+    (simulates real deployment).
+6.  Added label-shuffle sanity check: trains once on randomised labels and
+    reports AUC.  If AUC >> 0.5 the feature set still memorises.
+7.  Added permutation-importance dump so you can see what the model actually
+    relies on.
 
-Target:
-    y = 1 if epss_score >= threshold else 0
-    y = 0 if epss_score < threshold
+Allowed features
+-----------------
+CVSS score + CVSS subcomponents are allowed because CVSS is NOT used to build
+the EPSS label.
 
-Allowed features:
-    CVSS score + CVSS subcomponents are allowed because CVSS is NOT used to build the label.
+Target
+------
+y = 1  if  epss_score >= threshold
+y = 0  otherwise
 
-Still removed:
-    EPSS score/percentile, label columns, raw advisory IDs, KEV/exploit shortcut columns.
-
-Outputs are backend-compatible with main_final_pipeline_sha256.py:
-    model_leakage_safe.pkl
-    model_leakage_safe.pkl.sha256
-    model_meta.json
-    model_meta.json.sha256
-    feature_columns.json
-    feature_columns.json.sha256
-
-Run:
-python 08_train_epss_operational_ranker.py ^
+Run
+---
+python 08_train_epss_operational_ranker_v2.py ^
   --input ".\\dataset_merged\\merged_trainable.csv" ^
-  --out-dir ".\\model_output_EPSS_operational_ranker" ^
+  --out-dir ".\\model_output_EPSS_operational_ranker_v2" ^
   --epss-threshold 0.10 ^
   --target-precision 0.70
+
+# Add --temporal-split to use time-based train/test instead of group-random
 """
 
 from __future__ import annotations
@@ -65,7 +74,7 @@ from sklearn.preprocessing import OneHotEncoder
 from xgboost import XGBClassifier
 
 
-# Direct target leakage / memorization columns.
+# ── Direct target-leakage / memorisation columns ────────────────────────────
 DROP_ALWAYS = {
     # Labels / outputs
     "label_high_risk", "high_risk_label", "target", "label", "y",
@@ -73,10 +82,10 @@ DROP_ALWAYS = {
     "risk_score", "ai_risk_score", "priority_score", "exploit_probability",
     "prediction", "predicted_label", "optimal_threshold", "threshold",
 
-    # EPSS target signal: NEVER as feature for EPSS-only model
+    # EPSS target signal — NEVER as feature for EPSS-only model
     "epss", "epss_score", "epss_percentile", "percentile",
 
-    # Raw IDs / advisory IDs that can memorize vulnerabilities
+    # Raw IDs / advisory IDs that can memorise vulnerabilities
     "id", "osv_id", "cve_id", "ghsa_id", "advisory_id", "aliases", "alias",
     "cve", "ghsa", "all_cve_ids", "all_ghsa_ids", "vulnerability_id",
 
@@ -86,15 +95,18 @@ DROP_ALWAYS = {
 
     # Source metadata bias
     "source_dataset", "data_source", "source_database", "source",
+
+    # ── NEW in v2: high-cardinality memorisation risks ──
+    "package_name",        # per-package EPSS base-rate memorisation
+    "cvss_vector",         # redundant with parsed sub-components, near-unique
+    "feat_package_scope",  # npm scope memorises ecosystem patterns
 }
 
-# Keep the feature set backend-compatible with the current patched main.py.
-# IMPORTANT: If you add new feature names here, main.py must know how to build them too.
+# ── Feature allow-list (backend-compatible) ─────────────────────────────────
+# REMOVED from v1: package_name, cvss_vector, feat_package_scope
 CANDIDATE_FEATURES = [
-    # Package / advisory metadata
-    "package_name",
+    # CVSS (legitimate — independent of EPSS label)
     "cvss_score",
-    "cvss_vector",
     "attack_vector",
     "attack_complexity",
     "privileges_required",
@@ -104,6 +116,7 @@ CANDIDATE_FEATURES = [
     "integrity_impact",
     "availability_impact",
 
+    # Advisory metadata (low-cardinality, legitimate)
     "ranges_count",
     "versions_count",
     "summary_len",
@@ -117,10 +130,10 @@ CANDIDATE_FEATURES = [
     "is_static",
     "is_dynamic",
 
-    # Engineered features already supported by patched backend
+    # Engineered (low-cardinality, legitimate)
     "feat_has_cve",
     "feat_has_ghsa",
-    "feat_cwe_family",
+    "feat_cwe_family",      # bucketed to top-N + OTHER in v2
     "feat_has_cwe",
     "feat_published_year",
     "feat_days_since_published",
@@ -130,11 +143,15 @@ CANDIDATE_FEATURES = [
     "feat_days_since_withdrawn",
     "feat_package_len",
     "feat_is_scoped_package",
-    "feat_package_scope",
 ]
 
 CVSS_VECTOR_RE = re.compile(r"CVSS:\d\.\d/[^\s]+", re.I)
 
+# How many distinct CWE families to keep before bucketing to "OTHER"
+CWE_FAMILY_TOP_N = 30
+
+
+# ── Helpers ─────────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
@@ -143,6 +160,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--epss-threshold", type=float, default=0.10)
     p.add_argument("--target-precision", type=float, default=0.70)
     p.add_argument("--random-state", type=int, default=42)
+    p.add_argument("--temporal-split", action="store_true",
+                   help="Use time-based train/test split instead of group-random")
+    p.add_argument("--skip-shuffle-test", action="store_true",
+                   help="Skip the label-shuffle sanity check (saves time)")
     return p.parse_args()
 
 
@@ -191,13 +212,13 @@ def make_groups(df: pd.DataFrame) -> pd.Series:
             vals = df[col].apply(clean_missing)
             group = group.where(group.notna(), vals)
 
-    if "package_name" in df.columns:
-        fallback = df["package_name"].fillna("UNKNOWN_PACKAGE").astype(str) + "__" + df.index.astype(str)
-    else:
-        fallback = pd.Series([f"row_{i}" for i in range(len(df))], index=df.index)
-
+    # Fallback: row-level unique (no package-based grouping to avoid leaking
+    # package identity into group structure)
+    fallback = pd.Series([f"row_{i}" for i in range(len(df))], index=df.index)
     return group.where(group.notna(), fallback).astype(str)
 
+
+# ── CVSS vector parsing ────────────────────────────────────────────────────
 
 def parse_cvss_vector_to_components(vector: Any) -> Dict[str, str]:
     if pd.isna(vector) or not str(vector).strip():
@@ -241,8 +262,6 @@ def parse_cvss_vector_to_components(vector: Any) -> Dict[str, str]:
 
 def normalize_cvss_components(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-
-    # If components are missing but vector exists, recover components from vector.
     vector_col = "cvss_vector" if "cvss_vector" in df.columns else None
     if vector_col:
         parsed_rows = df[vector_col].apply(parse_cvss_vector_to_components)
@@ -254,9 +273,10 @@ def normalize_cvss_components(df: pd.DataFrame) -> pd.DataFrame:
                 df[col] = np.nan
             recovered = parsed_rows.apply(lambda d: d.get(col, np.nan) if isinstance(d, dict) else np.nan)
             df[col] = df[col].where(df[col].notna(), recovered)
-
     return df
 
+
+# ── Feature engineering ─────────────────────────────────────────────────────
 
 def add_backend_compatible_engineered_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -276,7 +296,7 @@ def add_backend_compatible_engineered_features(df: pd.DataFrame) -> pd.DataFrame
     df["feat_has_cve"] = df["has_cve"]
     df["feat_has_ghsa"] = ghsa_series.str.contains("GHSA-", case=False, regex=False).astype(int)
 
-    # CWE family: keep first CWE number as broad categorical signal.
+    # CWE family — bucketed to top-N + OTHER to prevent memorisation
     cwe_source = None
     for c in ["cwe_id", "cwe", "all_cwe_ids"]:
         if c in df.columns:
@@ -284,14 +304,16 @@ def add_backend_compatible_engineered_features(df: pd.DataFrame) -> pd.DataFrame
             break
     if cwe_source:
         cwe_text = df[cwe_source].astype(str)
-        extracted = cwe_text.str.extract(r"(\d+)", expand=False)
-        df["feat_cwe_family"] = extracted.fillna("UNKNOWN")
-        df["feat_has_cwe"] = (df["feat_cwe_family"] != "UNKNOWN").astype(int)
+        extracted = cwe_text.str.extract(r"(\d+)", expand=False).fillna("UNKNOWN")
+        # Bucket rare CWE families
+        top_cwes = extracted.value_counts().nlargest(CWE_FAMILY_TOP_N).index.tolist()
+        df["feat_cwe_family"] = extracted.where(extracted.isin(top_cwes), "OTHER")
+        df["feat_has_cwe"] = (extracted != "UNKNOWN").astype(int)
     else:
-        df["feat_cwe_family"] = "UNKNOWN"
+        df["feat_cwe_family"] = "OTHER"
         df["feat_has_cwe"] = 0
 
-    # Dates / temporal features.
+    # Dates / temporal features
     def year_from_any(x):
         if pd.isna(x):
             return np.nan
@@ -341,15 +363,11 @@ def add_backend_compatible_engineered_features(df: pd.DataFrame) -> pd.DataFrame
         df["feat_withdrawn_year"] = np.nan
         df["feat_days_since_withdrawn"] = np.nan
 
+    # Package-derived features (low-cardinality only — no raw name or scope)
     df["feat_package_len"] = df["package_name"].astype(str).str.len()
     df["feat_is_scoped_package"] = df["package_name"].astype(str).str.startswith("@").astype(int)
-    df["feat_package_scope"] = np.where(
-        df["package_name"].astype(str).str.startswith("@"),
-        df["package_name"].astype(str).str.split("/").str[0],
-        "unscoped",
-    )
 
-    # Required numeric defaults if absent.
+    # Required numeric defaults if absent
     for col in ["ranges_count", "versions_count", "summary_len", "details_len", "references_count"]:
         if col not in df.columns:
             df[col] = 0
@@ -367,6 +385,8 @@ def add_backend_compatible_engineered_features(df: pd.DataFrame) -> pd.DataFrame
     return df
 
 
+# ── Dataset preparation ────────────────────────────────────────────────────
+
 def prepare_dataset(df: pd.DataFrame, epss_threshold: float) -> Tuple[pd.DataFrame, pd.Series, pd.Series]:
     df = df.copy()
     epss_col = first_existing(df, ["epss_score", "epss"])
@@ -382,28 +402,27 @@ def prepare_dataset(df: pd.DataFrame, epss_threshold: float) -> Tuple[pd.DataFra
     df = normalize_cvss_components(df)
     df = add_backend_compatible_engineered_features(df)
 
-    # Build backend-compatible feature matrix.
+    # Build feature matrix — everything must pass both allow-list AND not be in DROP_ALWAYS
     features = [c for c in CANDIDATE_FEATURES if c in df.columns and c not in DROP_ALWAYS]
 
-    # If cvss_score is missing, create fallback from existing cvss-like columns if possible.
+    # cvss_score fallback
     if "cvss_score" not in df.columns:
         cvss_col = first_existing(df, ["cvss_base_score", "cvss"])
         if cvss_col:
             df["cvss_score"] = pd.to_numeric(df[cvss_col], errors="coerce")
             if "cvss_score" not in features:
-                features.insert(1, "cvss_score")
+                features.insert(0, "cvss_score")
 
-    # Drop fully constant features.
-    keep_features = []
-    for c in features:
-        if df[c].nunique(dropna=True) > 1:
-            keep_features.append(c)
+    # Drop fully constant features
+    keep_features = [c for c in features if df[c].nunique(dropna=True) > 1]
 
     X = df[keep_features].copy()
     return X, y.reset_index(drop=True), groups.reset_index(drop=True)
 
 
-def split_grouped(X: pd.DataFrame, y: pd.Series, groups: pd.Series, test_size: float, random_state: int):
+# ── Splitting ───────────────────────────────────────────────────────────────
+
+def split_grouped(X, y, groups, test_size, random_state):
     if groups.nunique() >= 10:
         splitter = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
         tr, te = next(splitter.split(X, y, groups))
@@ -413,11 +432,41 @@ def split_grouped(X: pd.DataFrame, y: pd.Series, groups: pd.Series, test_size: f
     return tr, te, "stratified"
 
 
+def split_temporal(df_full: pd.DataFrame, X: pd.DataFrame, y: pd.Series,
+                   test_ratio: float = 0.20):
+    """Split by publication date: train on older, test on newer."""
+    pub_col = first_existing(df_full, ["published", "published_year"])
+    if pub_col is None:
+        raise ValueError("No publication date column for temporal split")
+
+    dates = pd.to_datetime(df_full[pub_col], errors="coerce", utc=True)
+    # Use the subset that ended up in X (same index after EPSS filtering)
+    dates = dates.iloc[X.index] if len(dates) > len(X) else dates
+    dates = dates.reset_index(drop=True)
+
+    # Fallback for rows without dates: treat as old (conservative)
+    median_date = dates.dropna().median()
+    dates = dates.fillna(median_date)
+
+    cutoff = dates.quantile(1.0 - test_ratio)
+    train_mask = dates <= cutoff
+    test_mask = dates > cutoff
+
+    train_idx = np.where(train_mask)[0]
+    test_idx = np.where(test_mask)[0]
+
+    print(f"  Temporal split: train={len(train_idx)}, test={len(test_idx)}, "
+          f"cutoff={cutoff}")
+    return train_idx, test_idx, "temporal"
+
+
+# ── Preprocessing ───────────────────────────────────────────────────────────
+
 def make_preprocessor(X_train: pd.DataFrame):
     numeric_cols = X_train.select_dtypes(include=[np.number, "bool"]).columns.tolist()
     categorical_cols = [c for c in X_train.columns if c not in numeric_cols]
 
-    onehot = OneHotEncoder(handle_unknown="ignore", min_frequency=5, sparse_output=True)
+    onehot = OneHotEncoder(handle_unknown="ignore", min_frequency=10, sparse_output=True)
     pre = ColumnTransformer(
         transformers=[
             ("num", SimpleImputer(strategy="median"), numeric_cols),
@@ -432,7 +481,9 @@ def make_preprocessor(X_train: pd.DataFrame):
     return pre, numeric_cols, categorical_cols
 
 
-def choose_threshold(y_val: np.ndarray, p_val: np.ndarray, target_precision: float):
+# ── Threshold selection ─────────────────────────────────────────────────────
+
+def choose_threshold(y_val, p_val, target_precision):
     precision, recall, thresholds = precision_recall_curve(y_val, p_val)
     valid = np.where(precision[:-1] >= target_precision)[0]
     if len(valid):
@@ -452,7 +503,9 @@ def choose_threshold(y_val: np.ndarray, p_val: np.ndarray, target_precision: flo
     }
 
 
-def evaluate(y_true: np.ndarray, probs: np.ndarray, threshold: float) -> Dict[str, Any]:
+# ── Evaluation ──────────────────────────────────────────────────────────────
+
+def evaluate(y_true, probs, threshold):
     pred = (probs >= threshold).astype(int)
     tn, fp, fn, tp = confusion_matrix(y_true, pred, labels=[0, 1]).ravel()
     return {
@@ -467,9 +520,8 @@ def evaluate(y_true: np.ndarray, probs: np.ndarray, threshold: float) -> Dict[st
     }
 
 
-def ranking_metrics(y_true: np.ndarray, ai_score: np.ndarray, cvss_score: np.ndarray) -> Dict[str, Any]:
+def ranking_metrics(y_true, ai_score, cvss_score):
     out: Dict[str, Any] = {}
-
     y = np.asarray(y_true).astype(int)
     total_pos = int(y.sum())
 
@@ -512,6 +564,88 @@ def ranking_metrics(y_true: np.ndarray, ai_score: np.ndarray, cvss_score: np.nda
     return out
 
 
+# ── Label-shuffle sanity check ──────────────────────────────────────────────
+
+def label_shuffle_sanity_check(X_train, y_train, X_test, y_test,
+                               preprocessor, scale_pos_weight, random_state):
+    """
+    Train on shuffled labels.  If AUC >> 0.5, features still allow memorisation.
+    A clean feature set should give AUC ≈ 0.5 on shuffled labels.
+    """
+    print("\n══ Label-shuffle sanity check ══")
+    rng = np.random.RandomState(random_state)
+    y_shuffled = rng.permutation(y_train)
+
+    model_shuf = XGBClassifier(
+        n_estimators=200, max_depth=4, min_child_weight=4,
+        learning_rate=0.05, subsample=0.90, colsample_bytree=0.90,
+        reg_lambda=2.0, reg_alpha=0.15, objective="binary:logistic",
+        eval_metric="aucpr", scale_pos_weight=scale_pos_weight,
+        random_state=random_state, n_jobs=-1, tree_method="hist",
+    )
+    pipe_shuf = Pipeline([
+        ("preprocess", preprocessor),
+        ("model", model_shuf),
+    ])
+    pipe_shuf.fit(X_train, y_shuffled)
+    p_shuf = pipe_shuf.predict_proba(X_test)[:, 1]
+
+    try:
+        auc_shuffled = roc_auc_score(y_test, p_shuf)
+    except ValueError:
+        auc_shuffled = float("nan")
+    try:
+        aucpr_shuffled = average_precision_score(y_test, p_shuf)
+    except ValueError:
+        aucpr_shuffled = float("nan")
+
+    pos_rate = float(y_test.mean())
+
+    print(f"  Shuffled-label ROC-AUC on test: {auc_shuffled:.4f}  (expect ≈ 0.50)")
+    print(f"  Shuffled-label AUCPR on test:   {aucpr_shuffled:.4f}  (expect ≈ {pos_rate:.4f})")
+
+    if auc_shuffled > 0.60:
+        print("  ⚠️  WARNING: shuffled AUC > 0.60 — features may still allow memorisation!")
+    else:
+        print("  ✓  Shuffled AUC ≈ 0.50 — no evidence of feature-level memorisation.")
+
+    return {"shuffled_roc_auc": auc_shuffled, "shuffled_aucpr": aucpr_shuffled}
+
+
+# ── Permutation importance ──────────────────────────────────────────────────
+
+def permutation_importance_fast(pipe, X_test, y_test, n_repeats=5, random_state=42):
+    """Quick permutation importance on raw (pre-pipeline) features."""
+    rng = np.random.RandomState(random_state)
+    base_proba = pipe.predict_proba(X_test)[:, 1]
+    base_auc = roc_auc_score(y_test, base_proba)
+
+    results = {}
+    for col in X_test.columns:
+        drops = []
+        for _ in range(n_repeats):
+            X_perm = X_test.copy()
+            X_perm[col] = rng.permutation(X_perm[col].values)
+            try:
+                p_perm = pipe.predict_proba(X_perm)[:, 1]
+                perm_auc = roc_auc_score(y_test, p_perm)
+                drops.append(base_auc - perm_auc)
+            except Exception:
+                drops.append(0.0)
+        results[col] = {"mean_auc_drop": float(np.mean(drops)),
+                        "std_auc_drop": float(np.std(drops))}
+
+    # Sort by importance
+    sorted_feats = sorted(results.items(), key=lambda x: x[1]["mean_auc_drop"], reverse=True)
+    print("\n══ Permutation importance (AUC drop when feature shuffled) ══")
+    for feat, vals in sorted_feats:
+        print(f"  {feat:40s}  Δ AUC = {vals['mean_auc_drop']:+.5f}  (± {vals['std_auc_drop']:.5f})")
+
+    return dict(sorted_feats)
+
+
+# ── Main ────────────────────────────────────────────────────────────────────
+
 def main():
     args = parse_args()
     out_dir = Path(args.out_dir)
@@ -529,13 +663,28 @@ def main():
     for c in X.columns:
         print(f"  - {c}")
 
-    # 64% train, 16% validation, 20% test via grouped splitting.
-    trainval_idx, test_idx, split_test = split_grouped(X, y, groups, 0.20, args.random_state)
+    # ── Split ───────────────────────────────────────────────────────────────
+    if args.temporal_split:
+        print("\nUsing temporal split (train=older, test=newer)...")
+        trainval_idx, test_idx, split_test = split_temporal(
+            df_raw, X, y, test_ratio=0.20)
+    else:
+        trainval_idx, test_idx, split_test = split_grouped(
+            X, y, groups, 0.20, args.random_state)
+
     X_trainval = X.iloc[trainval_idx].reset_index(drop=True)
     y_trainval = y.iloc[trainval_idx].reset_index(drop=True)
     groups_trainval = groups.iloc[trainval_idx].reset_index(drop=True)
 
-    train_rel, val_rel, split_val = split_grouped(X_trainval, y_trainval, groups_trainval, 0.20, args.random_state + 1)
+    if args.temporal_split:
+        # For temporal: take the last 20% of trainval as validation
+        n_val = int(len(X_trainval) * 0.20)
+        train_rel = np.arange(len(X_trainval) - n_val)
+        val_rel = np.arange(len(X_trainval) - n_val, len(X_trainval))
+        split_val = "temporal"
+    else:
+        train_rel, val_rel, split_val = split_grouped(
+            X_trainval, y_trainval, groups_trainval, 0.20, args.random_state + 1)
 
     train_idx = trainval_idx[train_rel]
     val_idx = trainval_idx[val_rel]
@@ -550,6 +699,7 @@ def main():
 
     preprocessor, numeric_cols, categorical_cols = make_preprocessor(X_train)
 
+    # ── Train ───────────────────────────────────────────────────────────────
     model = XGBClassifier(
         n_estimators=550,
         max_depth=4,
@@ -572,9 +722,10 @@ def main():
         ("model", model),
     ])
 
-    print("Training EPSS-only operational XGBoost ranker...")
+    print("\nTraining EPSS-only operational XGBoost ranker (v2, leakage-hardened)...")
     pipe.fit(X_train, y_train)
 
+    # ── Evaluate ────────────────────────────────────────────────────────────
     p_val = pipe.predict_proba(X_val)[:, 1]
     threshold, threshold_info = choose_threshold(y_val, p_val, args.target_precision)
 
@@ -582,7 +733,10 @@ def main():
     val_metrics = evaluate(y_val, p_val, threshold)
     test_metrics = evaluate(y_test, p_test, threshold)
 
-    cvss_test = pd.to_numeric(X_test.get("cvss_score", pd.Series(0, index=X_test.index)), errors="coerce").fillna(0).to_numpy()
+    cvss_test = pd.to_numeric(
+        X_test.get("cvss_score", pd.Series(0, index=X_test.index)),
+        errors="coerce"
+    ).fillna(0).to_numpy()
     rank_metrics = ranking_metrics(y_test, p_test, cvss_test)
 
     print("\nValidation metrics:")
@@ -594,10 +748,24 @@ def main():
         print(f"  {k}: {v}")
 
     print("\nRanking comparison on held-out test set: AI score vs CVSS score")
-    for k in ["ai_aucpr", "cvss_aucpr", "ai_roc_auc", "cvss_roc_auc", "ai_ndcg", "cvss_ndcg", "ai_needed_for_80pct", "cvss_needed_for_80pct", "coverage_80pct_change_vs_cvss_pct"]:
+    for k in ["ai_aucpr", "cvss_aucpr", "ai_roc_auc", "cvss_roc_auc",
+              "ai_ndcg", "cvss_ndcg", "ai_needed_for_80pct",
+              "cvss_needed_for_80pct", "coverage_80pct_change_vs_cvss_pct"]:
         print(f"  {k}: {rank_metrics.get(k)}")
 
-    # Save artifacts using backend-compatible names.
+    # ── Diagnostics ─────────────────────────────────────────────────────────
+    shuffle_results = {}
+    if not args.skip_shuffle_test:
+        # Need a fresh preprocessor for the shuffle test
+        pre_shuf, _, _ = make_preprocessor(X_train)
+        shuffle_results = label_shuffle_sanity_check(
+            X_train, y_train, X_test, y_test,
+            pre_shuf, scale_pos_weight, args.random_state)
+
+    perm_imp = permutation_importance_fast(pipe, X_test, y_test,
+                                           n_repeats=5, random_state=args.random_state)
+
+    # ── Save artifacts (backend-compatible names) ───────────────────────────
     model_path = out_dir / "model_leakage_safe.pkl"
     meta_path = out_dir / "model_meta.json"
     feat_path = out_dir / "feature_columns.json"
@@ -609,7 +777,7 @@ def main():
 
     meta = {
         "model_type": "XGBoost EPSS-only operational ranking classifier",
-        "model_version": "epss-operational-ranker-v1",
+        "model_version": "epss-operational-ranker-v2-leakage-hardened",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "input_file": str(Path(args.input).resolve()),
         "label_mode": "epss_only",
@@ -628,29 +796,50 @@ def main():
         "categorical_feature_count": len(categorical_cols),
         "feature_columns_before_preprocessing": feature_columns,
         "leakage_policy": {
-            "removed_direct_label_signals": ["epss_score", "epss_percentile", "label columns", "generated risk outputs"],
+            "removed_v2": [
+                "package_name (high-cardinality memorisation)",
+                "cvss_vector (redundant with parsed components, near-unique)",
+                "feat_package_scope (ecosystem-level memorisation)",
+            ],
+            "removed_direct_label_signals": [
+                "epss_score", "epss_percentile", "label columns",
+                "generated risk outputs",
+            ],
             "allowed_operational_signals": ["cvss_score", "cvss subcomponents"],
-            "important_note": "This EPSS-only model may use CVSS as an input because CVSS is not used to define the EPSS target label.",
+            "cwe_bucketing": f"top-{CWE_FAMILY_TOP_N} CWE families + OTHER",
+            "important_note": "CVSS is allowed because it is not used to define the EPSS target label.",
         },
         "validation_metrics": val_metrics,
         "test_metrics": test_metrics,
         "ranking_comparison_test": rank_metrics,
+        "diagnostics": {
+            "label_shuffle_sanity": shuffle_results,
+            "permutation_importance_top10": {
+                k: v for k, v in list(perm_imp.items())[:10]
+            },
+        },
     }
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
-    pd.DataFrame({"feature": feature_columns}).to_csv(out_dir / "feature_columns.csv", index=False)
-    pd.DataFrame([rank_metrics]).to_csv(out_dir / "ranking_comparison_test.csv", index=False)
+    pd.DataFrame({"feature": feature_columns}).to_csv(
+        out_dir / "feature_columns.csv", index=False)
+    pd.DataFrame([rank_metrics]).to_csv(
+        out_dir / "ranking_comparison_test.csv", index=False)
+
+    # Permutation importance full dump
+    pd.DataFrame([
+        {"feature": k, **v} for k, v in perm_imp.items()
+    ]).sort_values("mean_auc_drop", ascending=False).to_csv(
+        out_dir / "permutation_importance.csv", index=False)
 
     for p in [model_path, meta_path, feat_path]:
         write_sha256(p)
 
     print("\nSaved backend-compatible artifacts:")
-    print(f"  {model_path}")
-    print(f"  {model_path}.sha256")
-    print(f"  {meta_path}")
-    print(f"  {meta_path}.sha256")
-    print(f"  {feat_path}")
-    print(f"  {feat_path}.sha256")
+    for f in [model_path, meta_path, feat_path]:
+        print(f"  {f}")
+        print(f"  {f}.sha256")
+    print(f"  {out_dir / 'permutation_importance.csv'}")
 
 
 if __name__ == "__main__":
