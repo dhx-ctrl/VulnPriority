@@ -1,124 +1,87 @@
-# AI vs CVSS benchmark
+# AI vs CVSS Benchmark
 
-This document explains how VulnPriority evaluates AI prioritization against CVSS-only ranking.
+## Purpose
 
-## Why this benchmark matters
+This document explains how VulnPriority evaluates AI-based vulnerability prioritization against a CVSS-only baseline.
 
-The project objective is not only to assign AI scores. The important question is:
+The objective is to measure whether the AI ranking helps an analyst reach the most relevant findings earlier than a traditional CVSS-based ordering.
 
-```text
-Does AI help analysts review fewer findings while still covering the important ones?
-```
+## Compared Ranking Strategies
 
-A simple CVSS-only workflow sorts findings by CVSS severity or CVSS score.
-
-VulnPriority compares that baseline against the operational EPSS ranker.
-
-## Compared rankings
-
-Two ranking strategies are compared:
-
-### 1. CVSS baseline
-
-Findings are sorted by:
-
-```text
-cvss_score DESC
-```
-
-This represents the traditional severity-first workflow.
-
-### 2. AI operational ranker
-
-Findings are sorted by:
-
-```text
-operational_rank_score DESC
-```
-
-This represents the VulnPriority workflow.
-
-## Label used for evaluation
-
-The operational benchmark uses an EPSS-based label, such as:
-
-```text
-EPSS >= 0.05
-```
-
-This means the evaluation checks how well each ranking strategy brings EPSS-positive findings toward the top of the queue.
-
-## Metrics
-
-Recommended metrics:
-
-| Metric | Purpose |
+| Strategy | Sorting Logic |
 |---|---|
-| AUCPR | Measures ranking quality under class imbalance |
-| ROC-AUC | Measures separation between positive and negative cases |
-| NDCG | Measures quality of ordering near the top of the queue |
-| Precision@10 / @50 / @100 | Measures how many top findings are relevant |
-| Recall@10 / @50 / @100 | Measures how much of the relevant set is captured early |
-| Findings needed for 80% coverage | Operational workload metric |
+| CVSS baseline | Findings are sorted by CVSS score in descending order |
+| AI operational ranker | Findings are sorted by operational AI rank score in descending order |
 
-## Current benchmark result
+## Current Model
 
-The held-out benchmark showed that the operational AI ranker performed better than CVSS-only ranking.
+The current operational model is a leakage-hardened EPSS ranker.
 
-Observed comparison:
+| Field | Value |
+|---|---|
+| Model | Current operational EPSS ranker |
+| Label mode | EPSS-only |
+| EPSS threshold for label | 0.10 |
+| Train/test split | Temporal |
+| Feature count | 30 |
 
-| Metric | AI ranker | CVSS baseline |
+The current operational ranker removes raw package identity, raw CVSS vector strings, and package scope strings. It also uses a temporal split, CWE-family bucketing, a label-shuffle sanity check, and permutation-importance reporting.
+
+## Main Benchmark Results
+
+| Metric | AI Operational Ranker | CVSS Baseline |
 |---|---:|---:|
-| AUCPR | 0.2646 | 0.1176 |
-| ROC-AUC | 0.8270 | 0.6177 |
-| NDCG | 0.7124 | 0.6064 |
-| Findings needed for 80% coverage | 389 | 733 |
+| AUCPR | 0.0582 | 0.0158 |
+| ROC-AUC | 0.7640 | 0.5740 |
+| NDCG | 0.3510 | 0.2715 |
+| Findings needed for 80% coverage | 441 | 1053 |
 
-The operational result means that the AI ranking required fewer findings to be reviewed to reach the same 80% coverage of EPSS-positive cases.
+The most important operational metric is the number of findings needed to cover 80% of EPSS-positive cases.
 
-Workload reduction:
+The AI ranker needed 441 reviewed findings.
 
-```text
-(733 - 389) / 733 = 46.9%
-```
+The CVSS baseline needed 1053 reviewed findings.
 
-So the dashboard can claim:
+This corresponds to:
 
-> In the held-out benchmark, the operational AI ranker reduced the review queue required to cover 80% of EPSS-positive findings by approximately 46.9% compared with CVSS-only sorting.
+(1053 - 441) / 1053 = 58.1%
 
-## Important limitation
+So, in this benchmark, the AI operational ranker reduces the review workload by approximately 58.1% compared with CVSS-only ordering.
 
-This does not mean the operational model is leakage-safe.
+## Precision and Recall at K
 
-The operational ranker uses CVSS and vulnerability metadata as input features.
+| K | AI Precision@K | CVSS Precision@K | AI Recall@K | CVSS Recall@K |
+|---:|---:|---:|---:|---:|
+| 10 | 0.10 | 0.00 | 0.125 | 0.000 |
+| 20 | 0.10 | 0.00 | 0.250 | 0.000 |
+| 50 | 0.04 | 0.02 | 0.250 | 0.125 |
+| 100 | 0.03 | 0.03 | 0.375 | 0.375 |
 
-The fair interpretation is:
+## Binary Classification Note
 
-> The operational ranker improves over CVSS alone by combining CVSS with additional vulnerability and package metadata.
+The operational ranker has a conservative selected threshold of 0.8905.
 
-The clean leakage-safe model is documented separately and is used as the anti-leakage scientific signal.
+At this threshold, the temporal test split produced no positive binary predictions, so the threshold-based precision, recall, and F1 are 0.0. This does not invalidate the ranking comparison, because the dashboard uses the continuous operational rank score for queue ordering.
 
-## How to reproduce
+Therefore, the correct interpretation is:
 
-Recommended repository files:
+The operational ranker is useful as a ranking and prioritization model.
 
-```text
-backend-ai/training/
-├── 08_train_epss_operational_ranker.py
-└── evaluate_ai_vs_cvss.py
+It should not be presented as a strict binary yes/no classifier.
 
-backend-ai/benchmark_results/
-├── ai_vs_cvss_metrics.json
-├── ai_vs_cvss_summary.md
-└── plots/
-```
+## Correct Report Wording
 
-Suggested evaluation steps:
+Use this wording:
 
-1. Load the held-out test set.
-2. Generate operational AI scores.
-3. Sort the same rows by CVSS score.
-4. Sort the same rows by AI rank score.
-5. Compute AUCPR, ROC-AUC, NDCG, Precision@K, Recall@K.
-6. Compute how many findings must be reviewed to cover 80% of EPSS-positive findings.
-7. Save metrics and plots in `benchmark_results/`.
+The updated operational EPSS ranker was evaluated against a CVSS-only baseline using ranking metrics. On the temporal held-out test split, the AI ranker required 441 reviewed findings to cover 80% of EPSS-positive cases, compared with 1053 findings for CVSS-only ordering. This corresponds to an approximate 58.1% reduction in review workload. The result is presented as an operational prioritization gain, not as a claim that the model is a strict binary classifier.
+
+## Important Distinction
+
+The project uses two separate models:
+
+| Model | Role |
+|---|---|
+| Clean leakage-safe model | Strict confidence signal |
+| Operational EPSS ranker | Practical dashboard queue-ordering model |
+
+The operational ranker is leakage-hardened, but it is still not the same as the clean leakage-safe model. It should be described as the practical ranking model used for prioritization.
