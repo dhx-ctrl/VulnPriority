@@ -119,6 +119,35 @@ If DefectDojo runs on the host machine while the backend runs in Docker, use:
 ```env
 DEFECTDOJO_URL=http://host.docker.internal:8080
 ```
+## Important note about the frontend Docker build
+
+The frontend Docker image serves the already-built React production files from:
+
+frontend-dashboard/dist/
+
+This means the frontend should be built before running Docker Compose if the dist folder is missing or outdated.
+
+From the frontend folder:
+
+cd frontend-dashboard
+npm install
+npm run build
+
+Then return to the project folder and start Docker Compose:
+
+cd ..
+docker compose up --build
+
+The reason for this setup is that the final Docker image uses Nginx to serve the static React build. The frontend Dockerfile copies the dist folder directly into Nginx.
+
+For this project, the dist folder is intentionally included so the local Docker deployment can run consistently without rebuilding the frontend inside the Docker image.
+
+If the dashboard source code changes, run:
+
+cd frontend-dashboard
+npm run build
+
+Then commit the updated dist files together with the source changes.
 
 ## Running without Docker
 

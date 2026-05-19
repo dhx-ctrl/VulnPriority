@@ -221,35 +221,30 @@ Then fill in your real values locally.
 
 ## Running with Docker Compose
 
-From:
+The main application is inside:
 
-```text
 ci-cd-security/
-```
 
-run:
+Before running Docker Compose, make sure the frontend production build exists:
 
-```powershell
+cd ci-cd-security/frontend-dashboard
+npm install
+npm run build
+
+Then start the full application:
+
+cd ..
 docker compose up --build
-```
 
 Frontend:
 
-```text
 http://127.0.0.1:5173
-```
 
 Backend health endpoint:
 
-```text
 http://127.0.0.1:8000/api/health/
-```
 
-If DefectDojo runs on the host machine while the backend runs inside Docker, use this in the backend `.env` file:
-
-```env
-DEFECTDOJO_URL=http://host.docker.internal:8080
-```
+Note: the frontend Docker image serves the prebuilt frontend-dashboard/dist/ folder through Nginx.
 
 ---
 
