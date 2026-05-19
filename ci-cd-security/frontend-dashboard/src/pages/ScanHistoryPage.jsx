@@ -5,6 +5,11 @@ import { useData } from '../context/DataContext.jsx';
 import { MOCK_SCAN_HISTORY } from '../data/mock-data.js';
 import { GlassCard } from './DashboardPage.jsx';
 
+const OPERATIONAL_PRIORITY = {
+  REVIEW_FIRST_MIN: 20,
+  REVIEW_SOON_MIN: 10,
+};
+
 // Build synthetic "scan run" records by grouping cached findings.
 // Falls back to MOCK_SCAN_HISTORY when no real findings have been loaded yet.
 function buildScanHistory(findings) {
@@ -31,7 +36,8 @@ function buildScanHistory(findings) {
 
   function isReviewFirst(f) {
     const score = scoreOf(f);
-    return Boolean(f.operational_is_high_risk ?? f.is_high_risk) || score >= 70;
+    return Boolean(f.operational_is_high_risk ?? f.is_high_risk) ||
+      score >= OPERATIONAL_PRIORITY.REVIEW_FIRST_MIN;
   }
 
   const groups = {};
@@ -82,9 +88,9 @@ function buildScanHistory(findings) {
       const highScannerCount = sev.critical + sev.high;
 
       const status =
-        reviewFirstCount >= 10 || aiScore >= 80
+        reviewFirstCount >= 1 || aiScore >= OPERATIONAL_PRIORITY.REVIEW_FIRST_MIN
           ? 'Block'
-          : reviewFirstCount >= 1 || aiScore >= 30 || cleanFlagCount >= 1 || highScannerCount >= 1
+          : aiScore >= OPERATIONAL_PRIORITY.REVIEW_SOON_MIN || cleanFlagCount >= 1 || highScannerCount >= 1
             ? 'Warn'
             : 'Pass';
 
@@ -166,11 +172,10 @@ function ScanHistoryPage() {
     return Math.floor(s / 86400) + 'd ago';
   }
 
-  // Color the AI score display using the same bands as risk_category:
-  // High 70–100 → red, Medium 30–69 → orange, Low 0–29 → green
+  // Color the average raw Rank /100 using the calibrated operational bands.
   function scoreColor(n) {
-    if (n >= 70) return '#ef4444';
-    if (n >= 30) return '#f97316';
+    if (n >= OPERATIONAL_PRIORITY.REVIEW_FIRST_MIN) return '#ef4444';
+    if (n >= OPERATIONAL_PRIORITY.REVIEW_SOON_MIN) return '#f97316';
     return '#22c55e';
   }
 

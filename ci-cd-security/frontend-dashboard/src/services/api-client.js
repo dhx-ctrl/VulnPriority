@@ -122,10 +122,22 @@ function _bool(value) {
   return ['1', 'true', 'yes', 'y'].includes(s);
 }
 
+const OPERATIONAL_PRIORITY = {
+  REVIEW_FIRST_MIN: 20,
+  REVIEW_SOON_MIN: 10,
+};
+
 function _scoreCategory(score) {
   const n = _num(score, 0);
   if (n >= 70) return 'High';
   if (n >= 30) return 'Medium';
+  return 'Low';
+}
+
+function _operationalScoreCategory(score) {
+  const n = _num(score, 0);
+  if (n >= OPERATIONAL_PRIORITY.REVIEW_FIRST_MIN) return 'High';
+  if (n >= OPERATIONAL_PRIORITY.REVIEW_SOON_MIN) return 'Medium';
   return 'Low';
 }
 
@@ -144,18 +156,18 @@ function _buildPriorityTier(f) {
     f.scanner_severity || f.severity || f.defectdojo_severity
   );
 
-  // Review First = operational ranker says it is urgent.
-  // Clean AI flag is secondary, not a hard gate.
-  if (f.operational_is_high_risk || opScore >= 70) {
+  // The operational ranker is a queue-ranking model.
+  // Use raw Rank /100 bands for priority labels; do not force priority
+  // using percentile alone, otherwise every sync will always create
+  // artificial "Review First" findings even when absolute rank is low.
+  if (f.operational_is_high_risk || opScore >= OPERATIONAL_PRIORITY.REVIEW_FIRST_MIN) {
     return 'Review First';
   }
 
-  // Review Soon = medium operational score OR clean model also flags it.
-  if (opScore >= 30 || f.clean_is_high_risk) {
+  if (f.clean_is_high_risk || opScore >= OPERATIONAL_PRIORITY.REVIEW_SOON_MIN) {
     return 'Review Soon';
   }
 
-  // Scanner says High/Critical, but operational rank is low.
   if (scannerRank >= 3) {
     return 'Severity Watch';
   }
@@ -282,7 +294,7 @@ window._normalizeScore = function (r) {
   const operationalCategory =
     r.operational_rank_category ||
     r.risk_category ||
-    _scoreCategory(operationalRankScore);
+    _operationalScoreCategory(operationalRankScore);
 
   const cleanCategory =
     r.clean_ai_category ||

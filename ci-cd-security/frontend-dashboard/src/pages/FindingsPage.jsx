@@ -15,17 +15,35 @@ function _maybeScore(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+const OPERATIONAL_PRIORITY = {
+  REVIEW_FIRST_MIN: 20,
+  REVIEW_SOON_MIN: 10,
+};
+
+function _rankScore(f) {
+  return _num(f.operational_rank_score ?? f.risk_score, 0);
+}
+
+function _priorityWeight(priority) {
+  if (priority === 'Review First') return 4;
+  if (priority === 'Review Soon') return 3;
+  if (priority === 'Severity Watch') return 2;
+  return 1;
+}
+
 function _priorityFromFinding(f) {
-  const rankScore = _num(f.operational_rank_score ?? f.risk_score, 0);
+  if (f.priority_tier) return f.priority_tier;
+
+  const rankScore = _rankScore(f);
   const cleanFlag = Boolean(f.clean_is_high_risk);
   const opAlert = Boolean(f.operational_is_high_risk ?? f.is_high_risk);
-  const sev = String(f.scanner_severity || f.severity || f.defectdojo_severity || '').toLowerCase();
+  const sev = String(f.scanner_severity || f.severity || '').toLowerCase();
 
-  if (opAlert || rankScore >= 70) {
+  if (opAlert || rankScore >= OPERATIONAL_PRIORITY.REVIEW_FIRST_MIN) {
     return 'Review First';
   }
 
-  if (rankScore >= 30 || cleanFlag) {
+  if (cleanFlag || rankScore >= OPERATIONAL_PRIORITY.REVIEW_SOON_MIN) {
     return 'Review Soon';
   }
 
@@ -288,10 +306,7 @@ function FindingsPage() {
     if (scanFilter !== 'All') data = data.filter(f => f.scanner_type === scanFilter);
     if (sevFilter  !== 'All') data = data.filter(f => f.severity === sevFilter);
     if (highRiskOnly) {
-      data = data.filter(f => {
-        const rankScore = _num(f.operational_rank_score ?? f.risk_score, 0);
-        return Boolean(f.operational_is_high_risk ?? f.is_high_risk) || rankScore >= 70;
-      });
+      data = data.filter(f => _priorityFromFinding(f) === 'Review First');
     }
 
     if (search) {
@@ -305,12 +320,17 @@ function FindingsPage() {
     }
 
     return [...data].sort((a, b) => {
-      const bRank = _num(b.operational_rank_score ?? b.risk_score, 0);
-      const aRank = _num(a.operational_rank_score ?? a.risk_score, 0);
+      const priorityDiff = _priorityWeight(_priorityFromFinding(b)) - _priorityWeight(_priorityFromFinding(a));
+      if (priorityDiff !== 0) return priorityDiff;
+
+      const bRank = _rankScore(b);
+      const aRank = _rankScore(a);
       if (bRank !== aRank) return bRank - aRank;
+
       if (Boolean(b.clean_is_high_risk) !== Boolean(a.clean_is_high_risk)) {
         return Boolean(b.clean_is_high_risk) ? 1 : -1;
       }
+
       return _num(b.cvss_score, 0) - _num(a.cvss_score, 0);
     });
   }, [allFindings, search, prodFilter, scanFilter, sevFilter, highRiskOnly]);
@@ -555,15 +575,15 @@ function FindingsPage() {
             ),
 
             paged.map(f => {
-              const rankScore = _num(f.operational_rank_score ?? f.risk_score, 0);
+              const rankScore = _rankScore(f);
               const cleanScore = _maybeScore(f.clean_ai_score);
               const cvss = _num(f.cvss_score, 0);
               const priority = _priorityFromFinding(f);
 
               const rankColor =
-                rankScore >= 90 ? '#ef4444' :
-                rankScore >= 70 ? '#f97316' :
-                rankScore >= 40 ? '#eab308' :
+                rankScore >= OPERATIONAL_PRIORITY.REVIEW_FIRST_MIN ? '#ef4444' :
+                rankScore >= OPERATIONAL_PRIORITY.REVIEW_SOON_MIN ? '#f97316' :
+                rankScore >= 5 ? '#eab308' :
                 textColor;
 
               const cleanColor =

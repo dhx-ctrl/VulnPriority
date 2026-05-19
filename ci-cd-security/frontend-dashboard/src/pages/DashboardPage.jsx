@@ -19,7 +19,7 @@ function normalizeRiskCategory(f) {
   if (raw === 'Critical' || raw === 'High') return 'High';
   if (raw === 'Medium') return 'Medium';
   if (raw === 'Low') return 'Low';
-  const score = _safeNumber(f.risk_score);
+  const score = _safeNumber(f.operational_score_percentile ?? f.risk_score);
   if (score >= 70) return 'High';
   if (score >= 30) return 'Medium';
   return 'Low';
@@ -30,7 +30,19 @@ function cleanFlagged(f) {
 }
 
 function operationalScore(f) {
-  return _safeNumber(f.operational_rank_score ?? f.risk_score, 0);
+  return _safeNumber(f.operational_score_percentile ?? f.operational_rank_score ?? f.risk_score, 0);
+}
+
+function cleanScore(f) {
+  const n = Number(f.clean_ai_score);
+  return Number.isFinite(n) ? n : null;
+}
+
+function cleanScoreColor(score) {
+  if (score === null) return '#64748b';
+  if (score >= 70) return '#e0364c';
+  if (score >= 30) return '#d6a312';
+  return '#25a36b';
 }
 
 function scannerSeverityRank(f) {
@@ -44,12 +56,21 @@ function scannerSeverityRank(f) {
 
 function dashboardPriorityTier(f) {
   const score = operationalScore(f);
+  const topPercentile = _safeNumber(f.operational_top_percentile, 999);
 
-  if (Boolean(f.operational_is_high_risk) || score >= 70) {
+  if (
+    Boolean(f.operational_is_high_risk) ||
+    topPercentile <= 5 ||
+    score >= 85
+  ) {
     return 'Review First';
   }
 
-  if (score >= 30 || cleanFlagged(f)) {
+  if (
+    cleanFlagged(f) ||
+    topPercentile <= 25 ||
+    score >= 65
+  ) {
     return 'Review Soon';
   }
 
@@ -242,9 +263,13 @@ function DashboardPage() {
 
   const cleanFlags = findings.filter(cleanFlagged).length;
 
-  const avgRisk = total > 0
-    ? (findings.reduce((a, f) => a + operationalScore(f), 0) / total).toFixed(1)
-    : '0.0';
+  const cleanScoreRows = findings
+    .map(f => cleanScore(f))
+    .filter(score => score !== null);
+
+  const avgClean = cleanScoreRows.length > 0
+    ? (cleanScoreRows.reduce((a, score) => a + score, 0) / cleanScoreRows.length).toFixed(1)
+    : 'N/A';
 
   const fixNow = useMemo(() => {
     const sorted = [...findings].sort((a, b) => {
@@ -333,7 +358,7 @@ function DashboardPage() {
       React.createElement(StatCard, { label: 'Total Findings', value: total, sub: 'Stored local findings', accent: BRAND_BLUE, icon: '↻', delay: 0 }),
       React.createElement(StatCard, { label: 'Review First', value: reviewFirst, sub: 'Top operational priority', accent: '#e0364c', icon: '!', delay: 45 }),
       React.createElement(StatCard, { label: 'Clean AI Flags', value: cleanFlags, sub: 'Strict leakage-safe alerts', accent: '#9b6bff', icon: '✓', delay: 90 }),
-      React.createElement(StatCard, { label: 'Avg Rank Score', value: avgRisk, sub: 'Operational score /100', accent: '#25a36b', icon: '↗', delay: 135 }),
+      React.createElement(StatCard, { label: 'Avg Clean Score', value: avgClean, sub: 'Strict confidence /100', accent: '#25a36b', icon: '↗', delay: 135 }),
     ),
 
     React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(320px, 0.85fr) minmax(380px, 1.15fr)', gap: 18 } },
@@ -415,7 +440,7 @@ function DashboardPage() {
     React.createElement(GlassCard, { delay: 240 },
       React.createElement(SectionTitle, {
         title: 'Review Queue — Operational Ranking',
-        subtitle: 'Sorted by priority tier, clean AI flag, then operational rank score. Scanner severity stays visible for context.',
+        subtitle: 'Sorted by operational priority. The score shown here is Clean /100, the stricter leakage-safe confidence signal.',
         right: React.createElement('span', { style: { fontSize: 11, padding: '5px 10px', borderRadius: 999, background: 'rgba(224,54,76,0.12)', color: '#e0364c', fontWeight: 800 } }, `${fixNow.length} items`),
       }),
       fixNow.length === 0
@@ -431,13 +456,12 @@ function DashboardPage() {
               React.createElement('div', null, 'Finding'),
               React.createElement('div', { style: { textAlign: 'center' } }, 'Priority'),
               React.createElement('div', { style: { textAlign: 'center' } }, 'Scanner'),
-              React.createElement('div', { style: { textAlign: 'right' } }, 'Rank /100'),
+              React.createElement('div', { style: { textAlign: 'right' } }, 'Clean /100'),
               React.createElement('div', { style: { textAlign: 'right' } }, 'CVSS'),
             ),
             React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 9, minWidth: 760 } },
               fixNow.map((f, idx) => {
-                const risk = normalizeRiskCategory(f);
-                const riskScore = _safeNumber(f.risk_score);
+                const clean = cleanScore(f);
                 const cvss = _safeNumber(f.cvss_score);
                 const severity = f.scanner_severity || f.defectdojo_severity || f.predicted_severity || 'Medium';
                 const sevColor = SEV_COLORS[severity] || SEV_COLORS.Medium;
@@ -466,8 +490,8 @@ function DashboardPage() {
                   React.createElement('div', { style: { textAlign: 'center' } }, React.createElement(PriorityPill, { tier: dashboardPriorityTier(f) })),
                   React.createElement('div', { style: { textAlign: 'center' } }, React.createElement(ScannerPill, { scanner: f.scanner_type || 'SCA' })),
                   React.createElement('div', { style: { textAlign: 'right' } },
-                    React.createElement('div', { className: 'num', style: { fontSize: 17, fontWeight: 900, color: RISK_COLORS[risk] || RISK_COLORS.Low } }, riskScore.toFixed(1)),
-                    React.createElement('div', { style: { fontSize: 10, color: c.muted, marginTop: 2 } }, '/100'),
+                    React.createElement('div', { className: 'num', style: { fontSize: 17, fontWeight: 900, color: cleanScoreColor(clean) } }, clean === null ? 'N/A' : clean.toFixed(1)),
+                    React.createElement('div', { style: { fontSize: 10, color: c.muted, marginTop: 2 } }, clean === null ? 'clean' : '/100'),
                   ),
                   React.createElement('div', { style: { textAlign: 'right' } },
                     React.createElement('div', { className: 'num', style: { fontSize: 13, fontWeight: 800, color: c.text } }, cvss.toFixed(1)),
