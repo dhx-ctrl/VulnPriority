@@ -26,11 +26,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: ci-cd-security/frontend-dashboard/package-lock.json
 
       - name: Install frontend dependencies
-        run: |
-          npm install --include=dev --no-audit --no-fund
-          npm install vite@^8.0.0 @vitejs/plugin-react@latest --save-dev --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Check Vite installation
         run: |
@@ -38,7 +38,7 @@ jobs:
           ls -la node_modules/.bin | grep vite
 
       - name: Build React dashboard
-        run: ./node_modules/.bin/vite build
+        run: npm run build
 
   backend-tests:
     name: Backend smoke tests
@@ -52,11 +52,10 @@ jobs:
       DASHBOARD_USERNAME: admin
       DASHBOARD_PASSWORD: Admin123!
       API_AUTH_TOKEN: test-api-token
-      AI_API_KEY: test-api-token
       DEFECTDOJO_URL: http://127.0.0.1:8080
       DEFECTDOJO_API_KEY: dummy-test-key
       DEFECTDOJO_PRODUCT_ID: ""
-      DASHBOARD_ORIGINS: http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5500,http://localhost:5500
+      DASHBOARD_ORIGINS: "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5500,http://localhost:5500"
 
     steps:
       - name: Checkout repository
@@ -81,22 +80,42 @@ jobs:
       - frontend-build
       - backend-tests
 
+    env:
+      CI_DASHBOARD_USERNAME: ${{ secrets.DASHBOARD_USERNAME }}
+      CI_DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+      CI_API_AUTH_TOKEN: ${{ secrets.API_AUTH_TOKEN }}
+      CI_DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
+      CI_DEFECTDOJO_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
+      CI_DEFECTDOJO_PRODUCT_ID: ${{ secrets.DEFECTDOJO_PRODUCT_ID }}
+      CI_DASHBOARD_ORIGINS: "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5500,http://localhost:5500"
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate Docker Compose file
-        run: docker compose -f ci-cd-security/docker-compose.yml config
-
-      # The frontend Dockerfile serves a prebuilt dist/ folder.
-      # Therefore the workflow builds the frontend first, then checks that dist exists.
       - name: Build frontend dist for Docker context
         working-directory: ci-cd-security/frontend-dashboard
         run: |
-          npm install --include=dev --no-audit --no-fund
-          npm install vite@^8.0.0 @vitejs/plugin-react@latest --save-dev --no-audit --no-fund
-          ./node_modules/.bin/vite build
+          npm ci --no-audit --no-fund
+          npm run build
           test -d dist
+
+      - name: Create backend .env for Docker Compose
+        run: |
+          cat > ci-cd-security/backend-ai/.env <<EOF
+          DASHBOARD_USERNAME=${CI_DASHBOARD_USERNAME}
+          DASHBOARD_PASSWORD=${CI_DASHBOARD_PASSWORD}
+          API_AUTH_TOKEN=${CI_API_AUTH_TOKEN}
+          DEFECTDOJO_URL=${CI_DEFECTDOJO_URL}
+          DEFECTDOJO_API_KEY=${CI_DEFECTDOJO_API_KEY}
+          DEFECTDOJO_PRODUCT_ID=${CI_DEFECTDOJO_PRODUCT_ID}
+          DASHBOARD_ORIGINS=${CI_DASHBOARD_ORIGINS}
+          AI_CLEAN_MODEL_DIR=model_output_FINAL_clean_minimal_features
+          AI_RANKER_MODEL_DIR=model_output_EPSS_operational_ranker
+          EOF
+
+      - name: Validate Docker Compose file
+        run: docker compose -f ci-cd-security/docker-compose.yml config
 
       - name: Build Docker images
         run: docker compose -f ci-cd-security/docker-compose.yml build
