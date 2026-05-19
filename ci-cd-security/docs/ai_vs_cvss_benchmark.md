@@ -122,9 +122,3 @@ Suggested evaluation steps:
 5. Compute AUCPR, ROC-AUC, NDCG, Precision@K, Recall@K.
 6. Compute how many findings must be reviewed to cover 80% of EPSS-positive findings.
 7. Save metrics and plots in `benchmark_results/`.
-
-## Report wording
-
-Use this wording in the final report:
-
-> The AI component was evaluated against a CVSS-only baseline using ranking metrics. The operational EPSS ranker achieved higher AUCPR, ROC-AUC, and NDCG than CVSS-only sorting. Most importantly, it required 389 reviewed findings to cover 80% of EPSS-positive cases, compared with 733 findings for CVSS-only sorting. This corresponds to an approximate 46.9% reduction in review workload. The result is presented as an operational prioritization gain, not as a claim that the ranker is leakage-safe.
