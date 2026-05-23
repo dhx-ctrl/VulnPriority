@@ -239,6 +239,8 @@ def resolve_dd_product_id(product_name: str) -> Tuple[int, str]:
                "Check the name or use /api/products/ to browse available products.",
     )
 
+_CVE_RE = re.compile(r"CVE-\d{4}-\d{4,}", re.IGNORECASE)
+
 def extract_cve_from_finding(finding: Dict) -> Optional[str]:
     """
     Search for a CVE identifier in the most likely locations of a DefectDojo
@@ -494,6 +496,8 @@ def normalise_dd_finding(finding: Dict) -> Tuple["VulnFeatures", Optional[str]]:
         is_dynamic         = is_dynamic,
         # Display metadata
         title              = dd_title,
+        description        = finding.get("description"),
+        references         = finding.get("references"),
         component_name     = dd_component_name,
         component_version  = dd_component_version,
         file_path          = dd_file_path,

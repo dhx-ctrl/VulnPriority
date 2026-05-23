@@ -17,36 +17,34 @@ from services.defectdojo import (
     normalise_dd_finding,
     resolve_dd_product_id,
 )
-from services.scoring import CLEAN_MODEL_VERSION, RANKER_MODEL_VERSION, resolve_features, run_dual_models
+from services.scoring import MODEL_VERSION, resolve_features, run_model
 
 router = APIRouter()
 
-@router.post("/api/sync-defectdojo/", tags=["DefectDojo"], dependencies=PROTECTED_ENDPOINT,
-          summary="Pull findings from DefectDojo, preserve scanner severity, score with AI risk model")
+
+@router.post(
+    "/api/sync-defectdojo/",
+    tags=["DefectDojo"],
+    dependencies=PROTECTED_ENDPOINT,
+    summary="Pull findings from DefectDojo and score with the single AI risk model",
+)
 def sync_defectdojo(request: SyncDefectDojoRequest):
     """
-    Full sync pipeline (replace semantics — NOT append):
-      1. Validates DefectDojo credentials from environment variables.
-      2. Resolves the target product by product_id or product_name.
-      3. Fetches active findings from /api/v2/findings/.
-      4. Preserves each finding's original DefectDojo/scanner severity.
-      5. Runs the binary AI risk model only.
-      6. Replaces the local cache for this product_id atomically.
-
-    The final AI workflow does NOT predict severity. Severity comes from
-    DefectDojo/scanner data. AI only adds risk_score, risk_category and
-    is_high_risk.
+    Full sync pipeline:
+      1. Validate DefectDojo credentials.
+      2. Resolve the target product by product_id/product_name/env fallback.
+      3. Fetch active findings from DefectDojo.
+      4. Preserve original scanner/DefectDojo severity.
+      5. Run the single v4 AI model.
+      6. Replace local cache for this product_id atomically.
     """
     if not DEFECTDOJO_URL or not DEFECTDOJO_API_KEY:
         raise HTTPException(
             status_code=503,
-            detail=(
-                "DEFECTDOJO_URL and DEFECTDOJO_API_KEY must be set in .env. "
-                "See .env.example."
-            ),
+            detail="DEFECTDOJO_URL and DEFECTDOJO_API_KEY must be set in .env.",
         )
 
-    product_id   = request.product_id
+    product_id = request.product_id
     product_name = request.product_name
 
     if product_id:
@@ -85,17 +83,17 @@ def sync_defectdojo(request: SyncDefectDojoRequest):
     scored_items: List[Dict[str, Any]] = []
     skipped = 0
     high_risk_count = 0
-    clean_high_risk_count = 0
     severity_breakdown: Dict[str, int] = {"Critical": 0, "High": 0, "Medium": 0, "Low": 0}
-    errors: List[Dict] = []
+    errors: List[Dict[str, Any]] = []
 
     for finding in findings:
         finding_id = finding.get("id")
         try:
             vuln, dd_product_name = normalise_dd_finding(finding)
             row_product_name = dd_product_name or resolved_product_name
-            row_clean, row_ranker, _, _ = resolve_features(vuln)
-            dual_res = run_dual_models(row_clean, row_ranker)
+
+            row, _, _ = resolve_features(vuln)
+            result = run_model(row)
 
             sev = (vuln.scanner_severity or vuln.defectdojo_severity or finding.get("severity") or "Medium").strip().title()
             if sev not in severity_breakdown:
@@ -105,7 +103,7 @@ def sync_defectdojo(request: SyncDefectDojoRequest):
 
             scored_items.append({
                 "payload": vuln,
-                "dual_res": dual_res,
+                "result": result,
                 "sev": sev,
                 "source": "defectdojo",
                 "defectdojo_finding_id": finding_id,
@@ -113,20 +111,17 @@ def sync_defectdojo(request: SyncDefectDojoRequest):
                 "product_id": product_id,
             })
 
-            if dual_res["operational_is_high_risk"]:
+            if result["is_high_risk"]:
                 high_risk_count += 1
-            if dual_res["clean_is_high_risk"]:
-                clean_high_risk_count += 1
 
         except Exception as exc:
             skipped += 1
             errors.append({"finding_id": finding_id, "error": str(exc)})
             log.warning(f"Failed to score DefectDojo finding {finding_id}: {exc}")
 
-    # Compute per-product operational rank percentiles for this sync batch.
-    # Higher percentile = higher priority within the synced product queue.
+    # Per-product percentile for dashboard ordering compatibility.
     if scored_items:
-        scores = np.array([float(item["dual_res"].get("operational_rank_score") or 0.0) for item in scored_items], dtype=float)
+        scores = np.array([float(item["result"].get("risk_score") or 0.0) for item in scored_items], dtype=float)
         if len(scores) == 1:
             percentiles = np.array([100.0])
         else:
@@ -134,13 +129,15 @@ def sync_defectdojo(request: SyncDefectDojoRequest):
             ranks = np.empty_like(order, dtype=float)
             ranks[order] = np.arange(1, len(scores) + 1, dtype=float)
             percentiles = (ranks - 1) / max(len(scores) - 1, 1) * 100.0
+
         for item, percentile in zip(scored_items, percentiles):
-            item["dual_res"]["operational_rank_percentile"] = round(float(percentile), 2)
+            item["result"]["operational_rank_percentile"] = round(float(percentile), 2)
+            item["result"]["rank_percentile"] = round(float(percentile), 2)
 
     scored_rows = [
         _score_record_tuple(
             payload=item["payload"],
-            dual_res=item["dual_res"],
+            dual_res=item["result"],  # parameter name kept for DB compatibility
             sev=item["sev"],
             source=item["source"],
             defectdojo_finding_id=item["defectdojo_finding_id"],
@@ -161,9 +158,10 @@ def sync_defectdojo(request: SyncDefectDojoRequest):
             )
             con.executemany(_AI_SCORE_INSERT_SQL, scored_rows)
             stored = scored
+
         log.info(
             f"Sync complete: replaced defectdojo cache for product_id={product_id} "
-            f"with {stored} findings ({skipped} failed, {high_risk_count} operational high-risk, {clean_high_risk_count} clean high-risk)."
+            f"with {stored} findings ({skipped} failed, {high_risk_count} high-risk)."
         )
     else:
         log.warning(
@@ -172,39 +170,35 @@ def sync_defectdojo(request: SyncDefectDojoRequest):
         )
 
     response = {
-        "product_id":         product_id,
-        "product_name":       resolved_product_name,
-        "total_fetched":      total_fetched,
-        "scored":             scored,
-        "stored":             stored,
-        "skipped_on_error":   skipped,
-        "high_risk_flagged":  high_risk_count,  # legacy alias: operational ranker threshold
+        "product_id": product_id,
+        "product_name": resolved_product_name,
+        "total_fetched": total_fetched,
+        "scored": scored,
+        "stored": stored,
+        "skipped_on_error": skipped,
+        "high_risk_flagged": high_risk_count,
+        # Temporary compatibility aliases for older frontend wording.
         "operational_high_risk_flagged": high_risk_count,
-        "clean_high_risk_flagged": clean_high_risk_count,
+        "clean_high_risk_flagged": high_risk_count,
         "severity_breakdown": severity_breakdown,
-        "errors":             errors if errors else None,
-        "models_used": {
-            "clean": CLEAN_MODEL_VERSION,
-            "operational_ranker": RANKER_MODEL_VERSION,
-        },
-        "model_used":         "dual_model_operational_ranker_primary",
-        "severity_source":    "DefectDojo/scanner severity preserved",
+        "errors": errors if errors else None,
+        "models_used": {"single": MODEL_VERSION},
+        "model_used": MODEL_VERSION,
+        "severity_source": "DefectDojo/scanner severity preserved",
         "note": (
-            f"DefectDojo cache replaced atomically for product_id={product_id} only. "
-            "Severity is preserved from DefectDojo/scanner data. "
-            "risk_score/is_high_risk are operational ranker aliases; clean_ai_* fields expose the strict leakage-safe model."
+            f"DefectDojo cache replaced atomically for product_id={product_id}. "
+            "The backend now uses one single AI model; clean_* and operational_* DB fields are compatibility aliases."
         ),
     }
 
     create_app_notification(
-        kind="sync_complete",
-        title="DefectDojo sync complete",
+        kind="sync_complete" if skipped == 0 else "sync_partial",
+        title="DefectDojo sync completed" if skipped == 0 else "DefectDojo sync partially completed",
         message=(
-            f"Synced {stored}/{total_fetched} findings"
-            f"{' for ' + str(resolved_product_name) if resolved_product_name else ''}. "
-            f"{high_risk_count} strict operational alert(s), {skipped} skipped."
+            f"Product {resolved_product_name or product_id}: fetched {total_fetched}, "
+            f"stored {stored}, skipped {skipped}, high-risk {high_risk_count}."
         ),
-        severity="High" if high_risk_count > 0 else "Low",
+        severity="Info" if skipped == 0 else "Medium",
         product_name=resolved_product_name,
         product_id=product_id,
         metadata=response,
@@ -214,42 +208,20 @@ def sync_defectdojo(request: SyncDefectDojoRequest):
 
 
 @router.get("/api/products/", tags=["DefectDojo"], dependencies=PROTECTED_ENDPOINT,
-         summary="List all DefectDojo products available for syncing")
-def get_products():
-    """
-    Proxies GET /api/v2/products/ from DefectDojo and returns a slim list of
-    ``{"id": int, "name": str}`` objects — one per product.
-
-    Use the returned ``id`` or ``name`` values as inputs to
-    ``POST /api/sync-defectdojo/`` instead of guessing numeric IDs.
-
-    Example response::
-
-        [
-            {"id": 1, "name": "JuiceShop"},
-            {"id": 2, "name": "DVWA"},
-            {"id": 3, "name": "DVNA"},
-            {"id": 4, "name": "NodeGoat"}
-        ]
-    """
+          summary="List DefectDojo products available for sync")
+def list_defectdojo_products():
     if not DEFECTDOJO_URL or not DEFECTDOJO_API_KEY:
         raise HTTPException(
             status_code=503,
-            detail=(
-                "DEFECTDOJO_URL and DEFECTDOJO_API_KEY must be set in .env. "
-                "See .env.example."
-            ),
+            detail="DEFECTDOJO_URL and DEFECTDOJO_API_KEY must be set in .env.",
         )
+
     try:
         return fetch_dd_products()
     except requests.HTTPError as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"DefectDojo API returned HTTP {exc.response.status_code}: "
-                   f"{exc.response.text[:300]}",
+            detail=f"DefectDojo API returned HTTP {exc.response.status_code}: {exc.response.text[:300]}",
         )
     except requests.RequestException as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Could not reach DefectDojo at '{DEFECTDOJO_URL}': {exc}",
-        )
+        raise HTTPException(status_code=502, detail=f"Could not reach DefectDojo at '{DEFECTDOJO_URL}': {exc}")

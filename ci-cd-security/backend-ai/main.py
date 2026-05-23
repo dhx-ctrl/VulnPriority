@@ -25,10 +25,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="DevSecOps AI Risk Scoring API",
     description=(
-        "XGBoost v3.2-compatible binary EPSS-based risk prioritization API. "
+        "Single v4 XGBoost stacked risk-prioritization API. "
         "Preserves scanner/DefectDojo severity and adds an AI risk score."
     ),
-    version="3.2.0",
+    version="4.0.0",
     lifespan=lifespan,
 )
 

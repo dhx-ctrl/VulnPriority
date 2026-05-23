@@ -300,8 +300,8 @@ CREATE TABLE IF NOT EXISTS ai_scores (
     product_name            TEXT,
     product_id              INTEGER,
 
-    -- Two-model output fields. Legacy risk_score/risk_category/is_high_risk
-    -- remain aliases for the operational ranker.
+    -- Legacy compatibility fields for the previous two-model frontend.
+    -- In the single-model backend, these are aliases for the same risk score.
     clean_ai_score                 REAL,
     clean_ai_category              TEXT,
     clean_is_high_risk             INTEGER,
@@ -591,7 +591,7 @@ def _human_notification_time(iso_str: Optional[str]) -> str:
 def _score_record_tuple(
     *,
     payload: VulnFeatures,
-    dual_res: Dict[str, Any],
+    dual_res: Dict[str, Any],  # single model result; name kept for compatibility
     sev: str,
     source: str,
     defectdojo_finding_id: Optional[int],
@@ -661,10 +661,9 @@ def persist_score(
     product_id: Optional[int] = None,
 ) -> int:
     """
-    Insert both AI model outputs and preserve original scanner severity.
+    Insert one AI model output and preserve original scanner severity.
 
-    Legacy fields risk_score/risk_category/is_high_risk are stored as aliases
-    for the operational EPSS ranker so existing frontend code remains stable.
+    Legacy clean_* and operational_* columns are filled as aliases so the existing frontend remains stable during migration.
     """
     sev = (payload.scanner_severity or payload.defectdojo_severity or "Medium").title()
     with get_db() as con:

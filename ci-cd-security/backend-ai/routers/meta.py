@@ -8,47 +8,44 @@ from fastapi import APIRouter, Query
 from core.config import API_AUTH_TOKEN, AUTH_HEADER_NAME, DASHBOARD_PASSWORD, DB_PATH
 from core.security import PROTECTED_ENDPOINT
 from database.crud import _human_notification_time, get_db
-from services.scoring import (
-    CLEAN_FEATURES,
-    CLEAN_MODEL_VERSION,
-    CLEAN_OPTIMAL_THRESHOLD,
-    RANKER_FEATURES,
-    RANKER_MODEL_VERSION,
-    RANKER_OPTIMAL_THRESHOLD,
-)
+from services.scoring import FEATURES, MODEL_META, MODEL_VERSION, OPTIMAL_THRESHOLD
 
 router = APIRouter()
 
-@router.get("/api/health/", tags=["Meta"], summary="Liveness check + model info")
+@router.get("/api/health/", tags=["Meta"], summary="Liveness check + single model info")
 def health():
     """
-    Returns loaded binary model version, feature list, optimal threshold,
-    auth status and DB location.
+    Returns loaded single-model version, feature list, threshold, auth status
+    and DB location.
     """
+    metrics = MODEL_META.get("new_model_test_metrics") or MODEL_META.get("recommended_operating_points", {}).get("balanced_default", {}).get("test", {})
+
     return {
-        "status":          "ok",
-        # Legacy keys kept for existing dashboard checks. They refer to the
-        # operational ranker because it owns risk_score/is_high_risk aliases.
-        "binary_model":    RANKER_MODEL_VERSION,
-        "threshold":       RANKER_OPTIMAL_THRESHOLD,
-        "binary_features": RANKER_FEATURES,
-        "models": {
-            "clean": {
-                "model": CLEAN_MODEL_VERSION,
-                "threshold": CLEAN_OPTIMAL_THRESHOLD,
-                "features": CLEAN_FEATURES,
-                "purpose": "strict leakage-safe confidence signal",
-            },
-            "operational_ranker": {
-                "model": RANKER_MODEL_VERSION,
-                "threshold": RANKER_OPTIMAL_THRESHOLD,
-                "features": RANKER_FEATURES,
-                "purpose": "primary dashboard sorting / EPSS exploitation-likelihood ranking",
-            },
+        "status": "ok",
+        "binary_model": MODEL_VERSION,
+        "threshold": OPTIMAL_THRESHOLD,
+        "binary_features": FEATURES,
+        "model": {
+            "name": MODEL_VERSION,
+            "threshold": OPTIMAL_THRESHOLD,
+            "features": FEATURES,
+            "feature_count": len(FEATURES),
+            "test_metrics": metrics,
+            "purpose": "single exploit-likelihood / vulnerability prioritization model",
         },
+        "models": {
+            "single": {
+                "model": MODEL_VERSION,
+                "threshold": OPTIMAL_THRESHOLD,
+                "features": FEATURES,
+                "feature_count": len(FEATURES),
+                "purpose": "only AI scoring model used by backend",
+            }
+        },
+        "dual_model_removed": True,
         "multiclass_model_removed": True,
-        "severity_source": "DefectDojo/scanner severity is preserved; no AI severity model is used.",
-        "db":              str(DB_PATH),
+        "severity_source": "DefectDojo/scanner severity is preserved; AI only predicts priority/risk.",
+        "db": str(DB_PATH),
         "auth": {
             "dashboard_login": True,
             "supports_user_creation": True,
@@ -111,7 +108,10 @@ def get_scores(
         d["operational_rank_category"] = d.get("operational_rank_category") or d.get("risk_category")
         d["operational_is_high_risk"] = bool(d.get("operational_is_high_risk") if d.get("operational_is_high_risk") is not None else d.get("is_high_risk"))
         d["operational_exploit_probability"] = d.get("operational_exploit_probability") if d.get("operational_exploit_probability") is not None else d.get("exploit_probability")
-        d["clean_is_high_risk"] = bool(d.get("clean_is_high_risk")) if d.get("clean_is_high_risk") is not None else False
+        d["clean_ai_score"] = d.get("clean_ai_score") if d.get("clean_ai_score") is not None else d.get("risk_score")
+        d["clean_ai_category"] = d.get("clean_ai_category") or d.get("risk_category")
+        d["clean_is_high_risk"] = bool(d.get("clean_is_high_risk") if d.get("clean_is_high_risk") is not None else d.get("is_high_risk"))
+        d["clean_exploit_probability"] = d.get("clean_exploit_probability") if d.get("clean_exploit_probability") is not None else d.get("exploit_probability")
         results.append(d)
 
     return results

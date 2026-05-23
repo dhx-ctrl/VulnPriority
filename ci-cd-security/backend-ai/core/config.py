@@ -7,7 +7,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+# Local development usually wants .env to win. In Docker Compose, set
+# DOTENV_OVERRIDE=false if you want Compose environment variables to win.
+DOTENV_OVERRIDE = os.getenv("DOTENV_OVERRIDE", "true").strip().lower() in {"1", "true", "yes", "on"}
+load_dotenv(override=DOTENV_OVERRIDE)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,6 +30,10 @@ API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN", "").strip()
 DASHBOARD_USERNAME = os.getenv("DASHBOARD_USERNAME", "admin").strip()
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "").strip()
 AUTH_HEADER_NAME = "X-API-Key"
+
+# Single-model configuration.
+AI_MODEL_DIR = os.getenv("AI_MODEL_DIR", "model_output_SINGLE_v4").strip()
+AI_MODEL_FILE = os.getenv("AI_MODEL_FILE", "").strip()
 
 DASHBOARD_ORIGINS = [
     origin.strip().rstrip("/")
