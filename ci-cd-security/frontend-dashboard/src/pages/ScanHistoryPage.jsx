@@ -4,7 +4,7 @@ import { useTheme } from "../context/AppContext.jsx";
 import { useData } from "../context/DataContext.jsx";
 import { MOCK_SCAN_HISTORY } from "../data/mock-data.js";
 import { GlassCard } from "./DashboardPage.jsx";
-const OPERATIONAL_PRIORITY = {
+const AI_PRIORITY = {
   REVIEW_FIRST_MIN: 20,
   REVIEW_SOON_MIN: 10,
 };
@@ -13,11 +13,11 @@ const OPERATIONAL_PRIORITY = {
 function buildScanHistory(findings) {
   if (!findings || findings.length === 0) return MOCK_SCAN_HISTORY;
   function scoreOf(f) {
-    const n = Number(f.operational_rank_score ?? f.risk_score ?? 0);
+    const n = Number(f.ai_risk_score ?? f.risk_score ?? f.operational_rank_score ?? 0);
     return Number.isFinite(n) ? n : 0;
   }
-  function cleanFlagged(f) {
-    return Boolean(f.clean_is_high_risk);
+  function aiFlagged(f) {
+    return Boolean(f.ai_decision ?? f.is_high_risk ?? f.operational_is_high_risk ?? f.clean_is_high_risk);
   }
   function scannerSeverity(f) {
     return String(
@@ -31,8 +31,8 @@ function buildScanHistory(findings) {
   function isReviewFirst(f) {
     const score = scoreOf(f);
     return (
-      Boolean(f.operational_is_high_risk ?? f.is_high_risk) ||
-      score >= OPERATIONAL_PRIORITY.REVIEW_FIRST_MIN
+      Boolean(f.ai_decision ?? f.is_high_risk) ||
+      score >= AI_PRIORITY.REVIEW_FIRST_MIN
     );
   }
   const groups = {};
@@ -51,15 +51,15 @@ function buildScanHistory(findings) {
       const sev = { critical: 0, high: 0, medium: 0, low: 0 };
       const toolSet = new Set();
       let reviewFirstCount = 0;
-      let cleanFlagCount = 0;
+      let aiFlagCount = 0;
       items.forEach((f) => {
         const s = scannerSeverity(f).toLowerCase();
         if (sev[s] !== undefined) sev[s]++;
         if (isReviewFirst(f)) reviewFirstCount++;
-        if (cleanFlagged(f)) cleanFlagCount++;
+        if (aiFlagged(f)) aiFlagCount++;
         if (f.scanner_type) toolSet.add(f.scanner_type);
       });
-      // Average of the top 10 operational rank scores.
+      // Average of the top 10 AI risk scores.
       // This gives a useful product-level signal without being diluted by hundreds of tiny findings.
       const sorted = [...items].sort((a, b) => scoreOf(b) - scoreOf(a));
       const top10 = sorted.slice(0, Math.min(10, sorted.length));
@@ -68,15 +68,15 @@ function buildScanHistory(findings) {
         : 0;
       // New status logic:
       // - Block = many Review First items or very high product-level rank
-      // - Warn  = some Review First items, medium/high avg rank, clean flags, or High/Critical scanner severity
-      // - Pass  = genuinely low operational priority
+      // - Warn  = some Review First items, medium/high avg rank, AI confidence flags, or High/Critical scanner severity
+      // - Pass  = genuinely low AI priority
       const highScannerCount = sev.critical + sev.high;
       const status =
         reviewFirstCount >= 1 ||
-        aiScore >= OPERATIONAL_PRIORITY.REVIEW_FIRST_MIN
+        aiScore >= AI_PRIORITY.REVIEW_FIRST_MIN
           ? "Block"
-          : aiScore >= OPERATIONAL_PRIORITY.REVIEW_SOON_MIN ||
-              cleanFlagCount >= 1 ||
+          : aiScore >= AI_PRIORITY.REVIEW_SOON_MIN ||
+              aiFlagCount >= 1 ||
               highScannerCount >= 1
             ? "Warn"
             : "Pass";
@@ -153,10 +153,10 @@ function ScanHistoryPage() {
     if (s < 86400) return Math.floor(s / 3600) + "h ago";
     return Math.floor(s / 86400) + "d ago";
   }
-  // Color the average raw Rank /100 using the calibrated operational bands.
+  // Color the average raw AI /100 using the calibrated AI bands.
   function scoreColor(n) {
-    if (n >= OPERATIONAL_PRIORITY.REVIEW_FIRST_MIN) return "#ef4444";
-    if (n >= OPERATIONAL_PRIORITY.REVIEW_SOON_MIN) return "#f97316";
+    if (n >= AI_PRIORITY.REVIEW_FIRST_MIN) return "#ef4444";
+    if (n >= AI_PRIORITY.REVIEW_SOON_MIN) return "#f97316";
     return "#22c55e";
   }
   const selectStyle = {
@@ -200,7 +200,7 @@ function ScanHistoryPage() {
           Scan History
         </h1>
         <p style={{ fontSize: 14, color: sub, margin: 0 }}>
-          Scan timeline grouped by product, using operational rank score and
+          Scan timeline grouped by product, using AI rank score and
           scanner severity.
         </p>
       </div>

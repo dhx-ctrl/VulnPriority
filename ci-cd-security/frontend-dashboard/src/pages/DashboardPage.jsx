@@ -24,6 +24,49 @@ const SEV_COLORS = {
   Medium: "#d6a312",
   Low: "#25a36b",
 };
+const SEVERITY_STACK_ORDER = Object.keys(SEV_COLORS);
+
+function makeStackBarShape(sev) {
+  return function StackBarShape(props) {
+    const { x, y, width, height, fill, payload } = props;
+
+    if (!width || !height || width <= 0 || height <= 0) return null;
+
+    const topVisibleSeverity = [...SEVERITY_STACK_ORDER]
+      .reverse()
+      .find((key) => Number(payload?.[key] || 0) > 0);
+
+    const shouldRoundTop = sev === topVisibleSeverity;
+    const r = shouldRoundTop ? Math.min(7, width / 2, height) : 0;
+
+    if (!shouldRoundTop || r <= 0) {
+      return (
+        <rect
+          x={x}
+          y={y}
+          width={width}
+          height={height}
+          fill={fill}
+        />
+      );
+    }
+
+    return (
+      <path
+        d={`
+          M ${x},${y + r}
+          Q ${x},${y} ${x + r},${y}
+          L ${x + width - r},${y}
+          Q ${x + width},${y} ${x + width},${y + r}
+          L ${x + width},${y + height}
+          L ${x},${y + height}
+          Z
+        `}
+        fill={fill}
+      />
+    );
+  };
+}
 const RISK_COLORS = { High: "#e0364c", Medium: "#d6a312", Low: "#25a36b" };
 const BRAND_BLUE = "#4f7df3";
 function _safeNumber(v, fallback = 0) {
@@ -42,20 +85,20 @@ function normalizeRiskCategory(f) {
   if (score >= 30) return "Medium";
   return "Low";
 }
-function cleanFlagged(f) {
-  return Boolean(f.clean_is_high_risk);
+function aiFlagged(f) {
+  return Boolean(f.ai_decision ?? f.is_high_risk ?? f.operational_is_high_risk ?? f.clean_is_high_risk);
 }
-function operationalScore(f) {
+function aiScore(f) {
   return _safeNumber(
-    f.operational_score_percentile ?? f.operational_rank_score ?? f.risk_score,
+    f.ai_risk_score ?? f.risk_score ?? f.operational_rank_score ?? f.clean_ai_score,
     0,
   );
 }
-function cleanScore(f) {
-  const n = Number(f.clean_ai_score);
+function aiScoreOrNull(f) {
+  const n = Number(f.ai_risk_score ?? f.risk_score ?? f.clean_ai_score);
   return Number.isFinite(n) ? n : null;
 }
-function cleanScoreColor(score) {
+function aiScoreColor(score) {
   if (score === null) return "#64748b";
   if (score >= 70) return "#e0364c";
   if (score >= 30) return "#d6a312";
@@ -74,7 +117,7 @@ function scannerSeverityRank(f) {
   return 0;
 }
 function dashboardPriorityTier(f) {
-  const score = operationalScore(f);
+  const score = aiScore(f);
   const topPercentile = _safeNumber(f.operational_top_percentile, 999);
   if (
     Boolean(f.operational_is_high_risk) ||
@@ -83,7 +126,7 @@ function dashboardPriorityTier(f) {
   ) {
     return "Review First";
   }
-  if (cleanFlagged(f) || topPercentile <= 25 || score >= 65) {
+  if (aiFlagged(f) || topPercentile <= 25 || score >= 65) {
     return "Review Soon";
   }
   if (scannerSeverityRank(f) >= 3) {
@@ -403,15 +446,15 @@ function DashboardPage() {
   const reviewFirst = findings.filter(
     (f) => dashboardPriorityTier(f) === "Review First",
   ).length;
-  const cleanFlags = findings.filter(cleanFlagged).length;
-  const cleanScoreRows = findings
-    .map((f) => cleanScore(f))
+  const aiHighRisk = findings.filter(aiFlagged).length;
+  const aiScoreRows = findings
+    .map((f) => aiScoreOrNull(f))
     .filter((score) => score !== null);
-  const avgClean =
-    cleanScoreRows.length > 0
+  const avgAiScore =
+    aiScoreRows.length > 0
       ? (
-          cleanScoreRows.reduce((a, score) => a + score, 0) /
-          cleanScoreRows.length
+          aiScoreRows.reduce((a, score) => a + score, 0) /
+          aiScoreRows.length
         ).toFixed(1)
       : "N/A";
   const fixNow = useMemo(() => {
@@ -422,7 +465,7 @@ function DashboardPage() {
         Number(Boolean(b.clean_is_high_risk)) -
         Number(Boolean(a.clean_is_high_risk));
       if (cleanDiff !== 0) return cleanDiff;
-      return operationalScore(b) - operationalScore(a);
+      return aiScore(b) - aiScore(a);
     });
     return sorted.slice(0, 8);
   }, [findings]);
@@ -469,26 +512,28 @@ function DashboardPage() {
     boxShadow: c.shadow,
     color: c.text,
   };
-  const cleanModel = health?.models?.clean || {};
-  const rankerModel = health?.models?.operational_ranker || {};
-  const rankerName =
-    rankerModel.model || health?.binary_model || "EPSS operational ranker";
-  const cleanName = cleanModel.model || "Leakage-safe clean model";
-  const rankerThreshold = rankerModel.threshold ?? health?.threshold;
-  const rankerThresholdDisplay = Number.isFinite(Number(rankerThreshold))
-    ? Number(rankerThreshold).toFixed(4)
+  const singleModel =
+    health?.models?.single ||
+    health?.models?.primary ||
+    health?.model ||
+    health?.models?.operational_ranker ||
+    {};
+  const modelName =
+    singleModel.model ||
+    health?.model_version ||
+    health?.binary_model ||
+    "XGBoost stacked ensemble (v4)";
+  const threshold = singleModel.threshold ?? health?.threshold;
+  const thresholdDisplay = Number.isFinite(Number(threshold))
+    ? Number(threshold).toFixed(4)
     : "metadata";
-  const cleanThresholdDisplay = Number.isFinite(Number(cleanModel.threshold))
-    ? Number(cleanModel.threshold).toFixed(4)
-    : "metadata";
-  const rankerFeatureCount = Array.isArray(rankerModel.features)
-    ? rankerModel.features.length
-    : Array.isArray(health?.binary_features)
-      ? health.binary_features.length
-      : "metadata";
-  const cleanFeatureCount = Array.isArray(cleanModel.features)
-    ? cleanModel.features.length
-    : "metadata";
+  const featureCount = Array.isArray(singleModel.features)
+    ? singleModel.features.length
+    : Array.isArray(health?.features)
+      ? health.features.length
+      : Array.isArray(health?.binary_features)
+        ? health.binary_features.length
+        : "metadata";
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
       <div
@@ -592,23 +637,23 @@ function DashboardPage() {
         <StatCard
           label="Review First"
           value={reviewFirst}
-          sub="Top operational priority"
+          sub="Highest AI priority tier"
           accent="#e0364c"
           icon="!"
           delay={45}
         />
         <StatCard
-          label="Clean AI Flags"
-          value={cleanFlags}
-          sub="Strict leakage-safe alerts"
+          label="AI High-Risk Flags"
+          value={aiHighRisk}
+          sub="Single-model high-risk decisions"
           accent="#9b6bff"
           icon="✓"
           delay={90}
         />
         <StatCard
-          label="Avg Clean Score"
-          value={avgClean}
-          sub="Strict confidence /100"
+          label="Avg AI Score"
+          value={avgAiScore}
+          sub="Single model score /100"
           accent="#25a36b"
           icon="↗"
           delay={135}
@@ -682,8 +727,8 @@ function DashboardPage() {
                     key={s}
                     dataKey={s}
                     fill={SEV_COLORS[s]}
-                    radius={[5, 5, 0, 0]}
                     stackId="a"
+                    shape={makeStackBarShape(s)}
                   />
                 ))}
               </BarChart>
@@ -764,8 +809,8 @@ function DashboardPage() {
         </GlassCard>
         <GlassCard delay={200} style={{ minHeight: 330 }}>
           <SectionTitle
-            title="Dual AI Model Status"
-            subtitle="Operational ranker sorts the queue; clean model is a strict confidence signal."
+            title="Single AI Model Status"
+            subtitle="One v4 model scores and prioritizes each vulnerability."
           />
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div
@@ -786,13 +831,13 @@ function DashboardPage() {
                   marginBottom: 9,
                 }}
               >
-                Operational Ranker
+                Single v4 AI Model
               </div>
               {[
-                ["Model", rankerName],
-                ["Use", "Main sorting score"],
-                ["Threshold", rankerThresholdDisplay],
-                ["Features", rankerFeatureCount],
+                ["Model", modelName],
+                ["Use", "Risk scoring + queue priority"],
+                ["Threshold", thresholdDisplay],
+                ["Features", featureCount],
               ].map(([k, v]) => (
                 <div
                   key={k}
@@ -840,13 +885,13 @@ function DashboardPage() {
                   marginBottom: 9,
                 }}
               >
-                Clean Leakage-Safe Model
+                Model Decision Output
               </div>
               {[
-                ["Model", cleanName],
-                ["Use", "Strict confidence flag"],
-                ["Threshold", cleanThresholdDisplay],
-                ["Features", cleanFeatureCount],
+                ["Decision", "High-risk flag"],
+                ["Use", "Single-model confidence flag"],
+                ["Confidence", "High / Medium / Low"],
+                ["Output", "Probability + score + label"],
               ].map(([k, v]) => (
                 <div
                   key={k}
@@ -880,8 +925,8 @@ function DashboardPage() {
       </div>
       <GlassCard delay={240}>
         <SectionTitle
-          title="Review Queue — Operational Ranking"
-          subtitle="Sorted by operational priority. The score shown here is Clean /100, the stricter leakage-safe confidence signal."
+          title="Review Queue — AI Priority"
+          subtitle="Sorted by single-model AI priority. The score shown here is AI /100."
           right={
             <span
               style={{
@@ -918,7 +963,7 @@ function DashboardPage() {
               <div>Finding</div>
               <div style={{ textAlign: "center" }}>Priority</div>
               <div style={{ textAlign: "center" }}>Scanner</div>
-              <div style={{ textAlign: "right" }}>Clean /100</div>
+              <div style={{ textAlign: "right" }}>AI /100</div>
               <div style={{ textAlign: "right" }}>CVSS</div>
             </div>
             <div
@@ -930,7 +975,7 @@ function DashboardPage() {
               }}
             >
               {fixNow.map((f, idx) => {
-                const clean = cleanScore(f);
+                const clean = aiScoreOrNull(f);
                 const cvss = _safeNumber(f.cvss_score);
                 const severity =
                   f.scanner_severity ||
@@ -1017,7 +1062,7 @@ function DashboardPage() {
                         style={{
                           fontSize: 17,
                           fontWeight: 900,
-                          color: cleanScoreColor(clean),
+                          color: aiScoreColor(clean),
                         }}
                       >
                         {clean === null ? "N/A" : clean.toFixed(1)}

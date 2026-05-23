@@ -33,7 +33,7 @@ function SyncPage() {
   const steps = [
     "Connecting to DefectDojo…",
     "Fetching findings…",
-    "Running dual AI scoring…",
+    "Running single v4 AI scoring…",
     "Storing ranked results…",
     "Refreshing dashboard…",
   ];
@@ -597,8 +597,7 @@ function SyncPage() {
                 }}
               >
                 Dashboard, Findings and Scan History have been refreshed with
-                dual-model scores. Use Rank /100 for queue priority and Clean
-                /100 as the strict confidence signal.
+                single-model v4 scores. Use AI /100 and confidence for queue priority.
               </div>
             </GlassCard>
           )}

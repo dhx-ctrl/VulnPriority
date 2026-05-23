@@ -1,4 +1,4 @@
-// Findings Page — compact dual-model table, real backend data only
+// Findings Page — single-model AI risk table, real backend data only
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useTheme } from "../context/AppContext.jsx";
 import { useData } from "../context/DataContext.jsx";
@@ -17,7 +17,7 @@ const OPERATIONAL_PRIORITY = {
   REVIEW_SOON_MIN: 10,
 };
 function _rankScore(f) {
-  return _num(f.operational_rank_score ?? f.risk_score, 0);
+  return _num(f.ai_risk_score ?? f.risk_score ?? f.operational_rank_score, 0);
 }
 function _priorityWeight(priority) {
   if (priority === "Review First") return 4;
@@ -28,13 +28,13 @@ function _priorityWeight(priority) {
 function _priorityFromFinding(f) {
   if (f.priority_tier) return f.priority_tier;
   const rankScore = _rankScore(f);
-  const cleanFlag = Boolean(f.clean_is_high_risk);
+  const aiFlag = Boolean(f.ai_decision ?? f.is_high_risk ?? f.operational_is_high_risk ?? f.clean_is_high_risk);
   const opAlert = Boolean(f.operational_is_high_risk ?? f.is_high_risk);
   const sev = String(f.scanner_severity || f.severity || "").toLowerCase();
   if (opAlert || rankScore >= OPERATIONAL_PRIORITY.REVIEW_FIRST_MIN) {
     return "Review First";
   }
-  if (cleanFlag || rankScore >= OPERATIONAL_PRIORITY.REVIEW_SOON_MIN) {
+  if (aiFlag || rankScore >= OPERATIONAL_PRIORITY.REVIEW_SOON_MIN) {
     return "Review Soon";
   }
   if (sev === "critical" || sev === "high") {
@@ -311,8 +311,8 @@ function FindingsPage() {
       const bRank = _rankScore(b);
       const aRank = _rankScore(a);
       if (bRank !== aRank) return bRank - aRank;
-      if (Boolean(b.clean_is_high_risk) !== Boolean(a.clean_is_high_risk)) {
-        return Boolean(b.clean_is_high_risk) ? 1 : -1;
+      if (Boolean(b.AI_is_high_risk) !== Boolean(a.AI_is_high_risk)) {
+        return Boolean(b.AI_is_high_risk) ? 1 : -1;
       }
       return _num(b.cvss_score, 0) - _num(a.cvss_score, 0);
     });
@@ -375,8 +375,7 @@ function FindingsPage() {
             lineHeight: 1.45,
           }}
         >
-          All findings stay visible. The operational rank score sorts the queue;
-          the clean AI score is a stricter leakage-safe confidence signal.
+          All findings stay visible. The single v4 AI score sorts the queue; confidence highlights borderline predictions.
         </p>
       </div>
       <GlassCard style={{ padding: 14, borderLeft: "4px solid #3884f4" }}>
@@ -397,7 +396,7 @@ function FindingsPage() {
                 letterSpacing: "0.07em",
               }}
             >
-              Rank /100
+              AI /100
             </div>
             <div
               style={{
@@ -407,7 +406,7 @@ function FindingsPage() {
                 lineHeight: 1.4,
               }}
             >
-              Operational EPSS ranker score used to order the review queue.
+              Single v4 model score used to order the review queue.
             </div>
           </div>
           <div>
@@ -420,7 +419,7 @@ function FindingsPage() {
                 letterSpacing: "0.07em",
               }}
             >
-              Clean /100
+              Confidence
             </div>
             <div
               style={{
@@ -430,8 +429,7 @@ function FindingsPage() {
                 lineHeight: 1.4,
               }}
             >
-              Strict leakage-safe model score, shown as a secondary confidence
-              signal.
+              Model confidence around the decision threshold.
             </div>
           </div>
           <div>
@@ -519,7 +517,7 @@ function FindingsPage() {
             style={selectStyle}
           >
             <option value="All">All Severities</option>
-            {...["Critical", "High", "Medium", "Low"].map((s) => (
+            {["Critical", "High", "Medium", "Low"].map((s) => (
               <option key={s} value={s}>
                 {s}
               </option>
@@ -593,8 +591,8 @@ function FindingsPage() {
                   "Scan",
                   "Severity",
                   "CVSS",
-                  "Rank /100",
-                  "Clean /100",
+                  "AI /100",
+                  "Confidence",
                   "Priority",
                   "Action",
                 ].map((h) => (
@@ -622,7 +620,7 @@ function FindingsPage() {
               )}
               {paged.map((f) => {
                 const rankScore = _rankScore(f);
-                const cleanScore = _maybeScore(f.clean_ai_score);
+                const confidenceScore = _maybeScore(f.ai_risk_score ?? f.risk_score ?? f.AI_ai_score);
                 const cvss = _num(f.cvss_score, 0);
                 const priority = _priorityFromFinding(f);
                 const rankColor =
@@ -633,12 +631,12 @@ function FindingsPage() {
                       : rankScore >= 5
                         ? "#eab308"
                         : textColor;
-                const cleanColor =
-                  cleanScore === null
+                const confidenceColor =
+                  confidenceScore === null
                     ? mutedColor
-                    : cleanScore >= 70
+                    : confidenceScore >= 70
                       ? "#ef4444"
-                      : cleanScore >= 40
+                      : confidenceScore >= 40
                         ? "#f97316"
                         : textColor;
                 return (
@@ -742,10 +740,10 @@ function FindingsPage() {
                       style={{
                         ...tdBase,
                         fontWeight: 900,
-                        color: cleanColor,
+                        color: confidenceColor,
                       }}
                     >
-                      {cleanScore === null ? "—" : cleanScore.toFixed(1)}
+                      {f.ai_confidence || (confidenceScore === null ? "—" : confidenceScore.toFixed(1))}
                     </td>
                     <td style={tdBase}>
                       <PriorityBadge priority={priority} />
@@ -760,7 +758,7 @@ function FindingsPage() {
                         text={
                           f.next_action ||
                           f.fix_recommendation ||
-                          "Review according to operational rank, clean AI flag, CVSS, and scanner severity"
+                          "Review according to AI risk, AI AI flag, CVSS, and scanner severity"
                         }
                         maxWidth="100%"
                       />
