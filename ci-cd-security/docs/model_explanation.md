@@ -1,144 +1,143 @@
-# Model Explanation
+# VulnPriority AI Model Explanation
 
-VulnPriority uses a dual-model architecture.
+## Current model
 
-The two models have different purposes and should not be described as the same type of model.
+The active VulnPriority model is a **single v4 stacked binary classifier** used for vulnerability prioritization.
 
-## Model 1 — Clean Leakage-Safe Model
+| Item | Value |
+|---|---|
+| Model type | XGBoost stacked ensemble (v4) |
+| Training rows | 7,114 |
+| Positive rate | 16.4% |
+| Split type | group split |
+| Features | 51 |
+| Threshold strategy | f1 |
+| Selected threshold | 0.386 |
+| Text features enabled | True |
+| Sample weights | True |
+| Hyperparameter tuning | Optuna, 60 trials, 4-fold grouped CV |
 
-### Purpose
+The model outputs a probability that a vulnerability belongs in the high-risk priority group. The backend converts that probability into dashboard-friendly fields: `ai_probability`, `ai_risk_score`, `ai_risk_label`, `ai_decision`, and `ai_confidence`.
 
-The clean model is the stricter scientific confidence signal. It exists to show that the project considered data leakage and avoided direct shortcut features.
+## Why one model is used
 
-### What it avoids
+The project previously experimented with more than one model. The final architecture uses one v4 model because it gives one consistent prioritization signal for the dashboard, API, documentation, and report. This avoids contradictory explanations where one model is described as scientific confidence while another is described as practical queue ordering.
 
-The clean model excludes direct or shortcut signals such as:
+The final v4 model is still leakage-safe: it is trained and validated with controls designed to prevent shortcut learning.
 
-- EPSS score
-- EPSS percentile
-- CVSS score
-- CVSS vector
-- CVSS subcomponents
-- scanner severity
-- exploit references
-- source metadata
-- known exploited flags used as direct labels
+## Training approach
 
-### Dashboard role
+The v4 model is a stacked ensemble:
 
-The clean model appears as:
+```text
+XGBoost + Random Forest + Logistic Regression
+        |
+        | out-of-fold predictions
+        v
+Calibrated logistic meta-learner
+```
 
-Clean /100
+The training script uses grouped splitting, grouped cross-validation, Optuna hyperparameter tuning, early stopping, optional OSV text fetching, engineered text/CWE features, and sample weighting based on label confidence.
 
-It is a secondary confidence signal.
+## Leakage controls
 
-It should not be used as a hard gate to hide findings.
+The training pipeline applies the following leakage controls:
 
-It can help upgrade a finding to Review Soon, but should not by itself force Review First.
+- EPSS, CVSS, and scanner severity are used to build labels only, not as model input features.
+- Raw label/target columns are removed from the feature matrix.
+- Direct identifiers and label-availability proxies are removed.
+- The test set is split off first and scored once at the end.
+- Grouped cross-validation keeps related vulnerabilities together.
+- The preprocessor is refit inside every fold.
+- The stacking meta-learner is trained from out-of-fold predictions.
+- Sample weights are derived from label-construction signals and applied only to training rows.
 
-### Correct interpretation
+## Feature set
 
-The clean model supports this claim:
+The final model uses 51 feature columns. The feature set includes:
 
-A leakage-aware model can still learn useful vulnerability prioritization patterns from non-obvious metadata and engineered features.
+- package metadata,
+- publication/modification timing,
+- reference counts,
+- advisory/patch reference indicators,
+- scanner type,
+- static/dynamic scanner flags,
+- CWE family and CWE exploitability tier,
+- text length and word count,
+- vulnerability keyword indicators,
+- package scope and package length.
 
-## Model 2 — Operational EPSS Ranker
+Examples of active feature columns:
 
-### Purpose
+```text
+package_name, published_year, days_since_published, days_since_modified, ranges_count, versions_count, summary_len, details_len, references_count, github_reviewed, has_patch_ref, has_advisory_ref, scanner_type, is_static, is_dynamic, feat_cwe_family, feat_has_cwe, feat_cwe_tier
+```
 
-The operational EPSS ranker is the practical queue-sorting model.
+## Model performance
 
-It is used to order findings by likely exploitation relevance and to compare prioritization against CVSS-only sorting.
+Balanced default operating point:
 
-### Target
+| Metric | Value |
+|---|---:|
+| Threshold | 0.386 |
+| Accuracy | 0.8946 |
+| Precision | 0.7098 |
+| Recall | 0.5957 |
+| F1 | 0.6478 |
+| F1-macro | 0.7929 |
+| MCC | 0.5895 |
+| Balanced accuracy | 0.7742 |
+| ROC-AUC | 0.9056 |
+| AUC-PR | 0.7387 |
 
-The operational ranker predicts an EPSS-based target.
+Confusion matrix:
 
-For the current model, the label is based on:
+|  | Predicted low | Predicted high |
+|---|---:|---:|
+| Actual low | 1128 | 56 |
+| Actual high | 93 | 137 |
 
-EPSS score >= 0.10
+## Threshold choice
 
-### Leakage-hardening
+The default threshold is `0.386`. It is selected as the balanced operating point for day-to-day triage.
 
-The current operational ranker was hardened compared with the earlier operational version.
+The model metadata also documents a high-recall mode:
 
-It removes:
+| Mode | Threshold | Precision | Recall | F1 | F1-macro | MCC |
+|---|---:|---:|---:|---:|---:|---:|
+| Balanced default | 0.386 | 0.7098 | 0.5957 | 0.6478 | 0.7929 | 0.5895 |
+| High-recall mode | 0.194 | 0.5075 | 0.7391 | 0.6018 | 0.7512 | 0.5206 |
 
-- package_name
-- raw cvss_vector
-- feat_package_scope
+The dashboard uses the balanced default unless the backend configuration is changed.
 
-These features were removed because they could memorise package-level or near-unique vulnerability patterns.
+## SHAP explanation
 
-The current model also uses:
+SHAP is used to explain which features most influenced the model. The beeswarm plot shows both feature importance and direction of impact. Points to the right increase the model output; points to the left decrease it. Red means the feature value is high, blue means it is low.
 
-- temporal train/test split
-- CWE-family bucketing
-- label-shuffle sanity check
-- permutation-importance reporting
+![SHAP summary beeswarm](assets/shap_summary_beeswarm.png)
 
-### Dashboard role
+Top SHAP features:
 
-The operational ranker appears as:
+| Feature | Mean absolute SHAP |
+|---|---:|
+| `has_advisory_ref` | 0.5711 |
+| `days_since_modified` | 0.5085 |
+| `references_count` | 0.2480 |
+| `days_since_published` | 0.1588 |
+| `feat_word_count` | 0.1516 |
+| `summary_len` | 0.1385 |
+| `details_len` | 0.1260 |
+| `feat_cwe_tier_rce` | 0.1105 |
+| `feat_kw_remote` | 0.0929 |
+| `feat_cwe_family_506` | 0.0928 |
+| `feat_text_len` | 0.0900 |
+| `feat_references_count` | 0.0809 |
 
-Rank /100
+Important interpretation notes:
 
-It is the primary sorting score in the dashboard.
+- `days_since_modified` and modification year features show that recently modified vulnerability records can influence prioritization.
+- Advisory/reference features show that vulnerabilities with richer external advisory evidence can receive stronger model attention.
+- Text and keyword features help the model identify patterns such as remote exploitation, injection, or code execution language.
+- CWE tier features group technical weakness types into broader exploitability categories.
 
-The dashboard uses it for:
-
-- Review Queue ordering
-- Findings table ranking
-- Scan History product-level status
-- Review First filtering
-- notification logic
-
-### Correct interpretation
-
-The correct claim is:
-
-The operational ranker improves over CVSS-only prioritization by combining CVSS with additional vulnerability and advisory metadata.
-
-The incorrect claim would be:
-
-The operational ranker is the same as the clean leakage-safe model.
-
-The operational ranker is leakage-hardened, but it is still the practical ranking model, while the clean model remains the stricter scientific confidence signal.
-
-## Priority Labels
-
-| Label | Rule | Explanation |
-|---|---|---|
-| Review First | Operational alert is true or Rank /100 is high enough for immediate attention | Highest review priority |
-| Review Soon | Medium operational priority or strict clean-model confidence | Important but not the top queue |
-| Severity Watch | Scanner severity High/Critical while operational priority is lower | Kept visible because scanner severity is high |
-| Backlog | Lower-scoring findings | Lower operational priority |
-
-## Scanner Severity vs AI Priority
-
-Scanner severity and AI priority answer different questions.
-
-Scanner severity answers:
-
-How severe is the technical impact according to the scanner or CVSS?
-
-AI priority answers:
-
-Which findings should the analyst review first?
-
-Therefore, a High scanner severity finding can still have a lower operational rank if the exploitation likelihood appears lower.
-
-## Why Two Models Are Useful
-
-The two-model setup balances academic defensibility and operational usefulness.
-
-| Model | Strength | Limitation |
-|---|---|---|
-| Clean leakage-safe model | Stronger against leakage criticism | Less powerful as a ranking tool |
-| Operational EPSS ranker | Better practical prioritization and CVSS comparison | Should be interpreted as a ranking model, not a strict yes/no classifier |
-
-## Final Positioning for the Report
-
-Use this wording:
-
-The project uses two separate models for different purposes. The clean model is the stricter leakage-safe confidence signal. The operational EPSS ranker is the practical dashboard ordering model. The current ranker was hardened by removing high-cardinality and near-unique memorisation features, and it is evaluated as a ranking model against CVSS-only prioritization.
+SHAP does not prove causality. It explains how the trained model used the available features on the evaluated dataset.
