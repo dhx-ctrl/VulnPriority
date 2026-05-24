@@ -18,6 +18,12 @@ import {
 import { useTheme } from "../context/AppContext.jsx";
 import { useData } from "../context/DataContext.jsx";
 import { apiClient } from "../services/api-client.js";
+import { GlassCard, cardColors } from "../components/ui/GlassCard.jsx";
+import StatCard from "../components/ui/StatCard.jsx";
+import SectionTitle from "../components/ui/SectionTitle.jsx";
+import ScannerPill from "../components/ui/ScannerPill.jsx";
+import PriorityPill from "../components/ui/PriorityPill.jsx";
+import EmptyPanel from "../components/ui/EmptyPanel.jsx";
 const SEV_COLORS = {
   Critical: "#e0364c",
   High: "#ef7a3c",
@@ -67,7 +73,6 @@ function makeStackBarShape(sev) {
     );
   };
 }
-const RISK_COLORS = { High: "#e0364c", Medium: "#d6a312", Low: "#25a36b" };
 const BRAND_BLUE = "#4f7df3";
 function _safeNumber(v, fallback = 0) {
   const n = Number(v);
@@ -120,7 +125,7 @@ function dashboardPriorityTier(f) {
   const score = aiScore(f);
   const topPercentile = _safeNumber(f.operational_top_percentile, 999);
   if (
-    Boolean(f.operational_is_high_risk) ||
+    Boolean(f.ai_decision ?? f.is_high_risk ?? f.operational_is_high_risk) ||
     topPercentile <= 5 ||
     score >= 85
   ) {
@@ -140,269 +145,6 @@ function priorityRank(f) {
   if (tier === "Review Soon") return 3;
   if (tier === "Severity Watch") return 2;
   return 1;
-}
-function cardColors(dark) {
-  return {
-    text: dark ? "#e6ecf5" : "#0b1220",
-    sub: dark ? "#98a8c0" : "#64748b",
-    muted: dark ? "#5b6e8c" : "#8493a8",
-    bg: dark ? "#0f1626" : "#ffffff",
-    bg2: dark ? "#131c30" : "#fafbfd",
-    border: dark ? "rgba(255,255,255,0.07)" : "rgba(15,23,42,0.08)",
-    softBorder: dark ? "rgba(255,255,255,0.04)" : "rgba(15,23,42,0.05)",
-    shadow: dark
-      ? "0 12px 28px -18px rgba(0,0,0,0.75)"
-      : "0 10px 28px -18px rgba(15,23,42,0.22)",
-  };
-}
-function GlassCard({ children, style, hover = false, delay = 0 }) {
-  const { dark } = useTheme();
-  const c = cardColors(dark);
-  return (
-    <div
-      className={hover ? "card-in lift" : "card-in"}
-      style={{
-        animationDelay: `${delay}ms`,
-        borderRadius: 16,
-        padding: 22,
-        background: c.bg,
-        border: `1px solid ${c.border}`,
-        boxShadow: c.shadow,
-        transition: "all 0.22s ease",
-        ...style,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-function SectionTitle({ title, subtitle, right }) {
-  const { dark } = useTheme();
-  const c = cardColors(dark);
-  return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "flex-start",
-        gap: 14,
-        marginBottom: 18,
-      }}
-    >
-      <div>
-        <h3 style={{ fontSize: 15, fontWeight: 800, color: c.text, margin: 0 }}>
-          {title}
-        </h3>
-        {subtitle && (
-          <p
-            style={{
-              fontSize: 12,
-              color: c.sub,
-              margin: "5px 0 0",
-              lineHeight: 1.45,
-            }}
-          >
-            {subtitle}
-          </p>
-        )}
-      </div>
-      {right || null}
-    </div>
-  );
-}
-function StatCard({ label, value, sub, accent = BRAND_BLUE, icon, delay = 0 }) {
-  const { dark } = useTheme();
-  const c = cardColors(dark);
-  return (
-    <GlassCard
-      hover={true}
-      delay={delay}
-      style={{
-        padding: 18,
-        position: "relative",
-        overflow: "hidden",
-        minHeight: 128,
-      }}
-    >
-      <div
-        style={{
-          position: "absolute",
-          top: -36,
-          right: -36,
-          width: 128,
-          height: 128,
-          borderRadius: "50%",
-          background: `radial-gradient(circle, ${accent}24, transparent 70%)`,
-          pointerEvents: "none",
-        }}
-      />
-      <div
-        style={{
-          display: "flex",
-          alignItems: "flex-start",
-          justifyContent: "space-between",
-          marginBottom: 16,
-          position: "relative",
-        }}
-      >
-        <div
-          style={{
-            fontSize: 11,
-            fontWeight: 800,
-            color: c.sub,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-          }}
-        >
-          {label}
-        </div>
-        <div
-          style={{
-            width: 34,
-            height: 34,
-            borderRadius: 10,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: accent + (dark ? "22" : "14"),
-            color: accent,
-            fontSize: 16,
-            fontWeight: 800,
-          }}
-        >
-          {icon || "•"}
-        </div>
-      </div>
-      <div
-        className="num"
-        style={{
-          fontSize: 31,
-          fontWeight: 800,
-          color: c.text,
-          lineHeight: 1,
-          letterSpacing: "-0.035em",
-          position: "relative",
-        }}
-      >
-        {value}
-      </div>
-      {sub && (
-        <div
-          style={{
-            fontSize: 12,
-            color: c.sub,
-            marginTop: 9,
-            fontWeight: 500,
-            position: "relative",
-          }}
-        >
-          {sub}
-        </div>
-      )}
-    </GlassCard>
-  );
-}
-function RiskPill({ category }) {
-  const { dark } = useTheme();
-  const risk = category || "Low";
-  const color = RISK_COLORS[risk] || RISK_COLORS.Low;
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        minWidth: 84,
-        padding: "5px 10px",
-        borderRadius: 999,
-        background: color + (dark ? "22" : "15"),
-        color,
-        border: `1px solid ${color}${dark ? "33" : "25"}`,
-        fontSize: 11,
-        fontWeight: 800,
-        letterSpacing: "0.02em",
-      }}
-    >{`${risk} Risk`}</span>
-  );
-}
-function ScannerPill({ scanner }) {
-  const { dark } = useTheme();
-  const color =
-    scanner === "DAST" ? "#9b6bff" : scanner === "SAST" ? "#4f7df3" : "#25a36b";
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        justifyContent: "center",
-        minWidth: 48,
-        padding: "4px 8px",
-        borderRadius: 8,
-        background: color + (dark ? "1e" : "12"),
-        color,
-        fontSize: 11,
-        fontWeight: 800,
-        border: `1px solid ${color}${dark ? "30" : "20"}`,
-      }}
-    >
-      {scanner || "SCA"}
-    </span>
-  );
-}
-function PriorityPill({ tier }) {
-  const { dark } = useTheme();
-  const label = tier || "Backlog";
-  const color =
-    label === "Review First"
-      ? "#e0364c"
-      : label === "Review Soon"
-        ? "#ef7a3c"
-        : label === "Severity Watch"
-          ? "#d6a312"
-          : "#64748b";
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        minWidth: 92,
-        padding: "5px 8px",
-        borderRadius: 999,
-        background: color + (dark ? "22" : "15"),
-        color,
-        border: `1px solid ${color}${dark ? "33" : "25"}`,
-        fontSize: 10.5,
-        fontWeight: 900,
-        letterSpacing: "0.01em",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {label}
-    </span>
-  );
-}
-function EmptyPanel({ text }) {
-  const { dark } = useTheme();
-  const c = cardColors(dark);
-  return (
-    <div
-      style={{
-        minHeight: 170,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        textAlign: "center",
-        color: c.sub,
-        fontSize: 13,
-        border: `1px dashed ${c.border}`,
-        borderRadius: 14,
-        background: dark ? "rgba(255,255,255,0.015)" : "rgba(15,23,42,0.015)",
-        padding: 20,
-      }}
-    >
-      {text}
-    </div>
-  );
 }
 function DashboardPage() {
   const { dark } = useTheme();
