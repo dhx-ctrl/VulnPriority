@@ -17,10 +17,6 @@ chmod 777 "$ZAP_WORK_DIR"
 
 docker pull ghcr.io/zaproxy/zaproxy:stable
 
-# Pre-flight: confirm the target is still reachable from zapnet.
-# The image pull above can take minutes; the target may have crashed
-# in the meantime.  ZAP gives an unhelpful "msg is null" error when
-# the target is unreachable, so we catch it early with a clear message.
 echo "Pre-flight: verifying ${APP_URL} is reachable from zapnet..."
 PF_CODE=$(docker run --rm --network zapnet curlimages/curl:8.6.0 \
   -sS -o /dev/null -w "%{http_code}" --max-time 10 \
