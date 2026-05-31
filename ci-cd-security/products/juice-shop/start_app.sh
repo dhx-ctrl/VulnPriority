@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# start_app.sh — Start Juice Shop for ZAP scanning.
-#
-# Sourced by run_pipeline.sh.
-# Expects: APP_NAME, APP_URL, APP_PORT, CONTAINER_PORT, DOCKER_IMAGE_NAME
 
 set -euo pipefail
 
