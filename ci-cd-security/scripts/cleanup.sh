@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
-# cleanup.sh — Clean up after a pipeline run.
-#
-# Executed by wrapper workflow AFTER artifact upload.
-# Safe to run even if the pipeline failed halfway.
+# cleanup.sh — Clean up after a pipeline run
 
 set +e
 
