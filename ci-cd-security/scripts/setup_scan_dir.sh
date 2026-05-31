@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
-# setup_scan_dir.sh — Prepare the scan output directory.
-#
-# Sourced by run_pipeline.sh.  Expects GITHUB_RUN_ID or RUNNER_TEMP to be set.
-# Sets RUN_OUTPUT_DIR for all downstream scripts.
 
 set -euo pipefail
 
-# Use /tmp consistently — matches the original workflows.
-# On self-hosted runners RUNNER_TEMP is often NOT /tmp, so we hardcode /tmp
-# to preserve the exact same paths the existing pipeline uses.
 SCAN_BASE_DIR="/tmp/devsecops-scans"
 RUN_OUTPUT_DIR="${SCAN_BASE_DIR}/${GITHUB_RUN_ID:-$$}"
 
