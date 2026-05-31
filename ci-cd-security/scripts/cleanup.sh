@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# cleanup.sh — Clean up after a pipeline run
 
 set +e
 
