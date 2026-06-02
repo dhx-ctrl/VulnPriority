@@ -9,10 +9,15 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+import os
+import hashlib
+import secrets
 
 from fastapi import HTTPException
 
 from core.config import DASHBOARD_PASSWORD, DASHBOARD_USERNAME, DB_PATH, log
+
+
 
 def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -59,6 +64,10 @@ def get_session_user(token: str) -> Optional[Dict[str, Any]]:
         "is_admin": bool(data.get("is_admin")),
         "source": "session",
     }
+
+_PASSWORD_ALGORITHM = "pbkdf2_sha256"
+_PASSWORD_ITERATIONS = 260000
+_PASSWORD_SALT_BYTES = 16
 
 def hash_password(password: str) -> str:
     """
