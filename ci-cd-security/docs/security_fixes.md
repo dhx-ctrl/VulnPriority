@@ -132,15 +132,16 @@ This prevents malicious or accidental variable injection through metadata files.
 
 ## 8. Model loading hardening
 
-Original risk: loading pickle files directly is unsafe if artifacts are modified.
+Original risk: loading pickle/joblib files directly is unsafe if artifacts are modified.
 
 Current fix:
 
+- the backend loads the single v4 model from `model_output_SINGLE_v4/`;
 - model files are loaded with `joblib`;
-- every artifact is verified with SHA-256 before loading;
+- every main artifact is verified with SHA-256 before loading;
 - the backend refuses to start if a hash mismatch is found.
 
-Each model folder contains:
+The active model folder contains:
 
 ```text
 model_leakage_safe.pkl
@@ -149,6 +150,19 @@ model_meta.json
 model_meta.json.sha256
 feature_columns.json
 feature_columns.json.sha256
+```
+
+Operational rule:
+
+```text
+If a model artifact, metadata file, or feature-column file changes, regenerate the matching .sha256 file and commit it with the changed artifact.
+```
+
+Example command for `model_meta.json`:
+
+```powershell
+cd ci-cd-security/backend-ai
+python -c "from pathlib import Path; import hashlib; p=Path('model_output_SINGLE_v4/model_meta.json'); h=hashlib.sha256(p.read_bytes()).hexdigest(); Path('model_output_SINGLE_v4/model_meta.json.sha256').write_text(h + '  model_meta.json\n', encoding='utf-8'); print(h)"
 ```
 
 ## 9. Runtime database handling

@@ -76,7 +76,7 @@ It provides:
 - dashboard login and local user management;
 - pending user registration and admin approval;
 - DefectDojo synchronization;
-- AI risk scoring;
+- single-model AI risk scoring;
 - stored score browsing;
 - product summaries;
 - notifications;
@@ -93,38 +93,35 @@ This database is generated locally and should not be committed.
 
 ---
 
-### 4. Dual AI model setup
+### 4. Single v4 AI model
 
-The backend uses two separate models.
+The backend uses one production AI model: the single v4 stacked AI risk model.
 
-#### Clean leakage-safe model
+The model combines XGBoost, Random Forest, and Logistic Regression as base learners, with a Logistic Regression meta-learner. It outputs an exploitation-likelihood probability, which is converted into a risk score from 0 to 100.
 
-This model is used as a stricter scientific confidence signal. It excludes direct shortcut features such as EPSS score, CVSS score, scanner severity, exploit references, source metadata, raw identifiers, and CVSS subcomponents.
-
-Dashboard field:
+Active model folder:
 
 ```text
-Clean /100
+ci-cd-security/backend-ai/model_output_SINGLE_v4/
 ```
 
-#### Operational EPSS ranker
+Main model outputs:
 
-This model is used as the main practical ranking model. It predicts an EPSS-based target and is used to sort findings in the dashboard review queue.
+| Field | Meaning |
+|---|---|
+| AI /100 | Dashboard risk score from 0 to 100 |
+| AI probability | Raw model probability for high-risk prioritization |
+| AI risk label | Human-readable risk category |
+| AI confidence | Confidence bucket derived from model output |
+| AI high-risk decision | Boolean decision based on the selected threshold |
 
-Dashboard field:
+The selected operating threshold is:
 
 ```text
-Rank /100
+0.386
 ```
 
-Important distinction:
-
-```text
-Clean model = leakage-aware scientific signal
-Operational ranker = practical queue-sorting model
-```
-
-The operational ranker is not presented as the leakage-safe model. It is presented as a practical ranking model that improves over CVSS-only ordering by combining CVSS with additional vulnerability and package metadata.
+The previous dual-model setup has been removed from the active architecture. Old `clean_*` and `operational_*` fields may still exist as temporary backend compatibility aliases, but they are not the current conceptual model.
 
 ---
 
@@ -156,8 +153,10 @@ The dashboard uses the backend API and displays:
 |---|---|
 | Scanner Severity | Original severity from scanner or DefectDojo |
 | CVSS | Standard severity baseline |
-| Rank /100 | Operational EPSS ranker score |
-| Clean /100 | Leakage-safe model confidence signal |
+| AI /100 | Single v4 model risk score |
+| AI probability | Single v4 model high-risk probability |
+| AI risk label | Low, Medium, High, or similar dashboard label |
+| AI confidence | Confidence indicator for the model output |
 
 ---
 
@@ -167,9 +166,9 @@ The dashboard uses these triage labels:
 
 | Label | Rule | Meaning |
 |---|---|---|
-| Review First | Operational alert is true or Rank /100 >= 70 | Highest review priority |
-| Review Soon | Rank /100 >= 30 or clean model flag is true | Review after the top queue |
-| Severity Watch | Scanner severity High/Critical but Rank /100 < 30 | Keep visible because scanner severity is important |
+| Review First | AI high-risk decision is true or AI /100 >= 70 | Highest review priority |
+| Review Soon | AI /100 >= 30 | Review after the top queue |
+| Severity Watch | Scanner severity High/Critical but AI /100 < 30 | Keep visible because scanner severity is important |
 | Backlog | Everything else | Lower operational priority |
 
 ---
@@ -217,34 +216,53 @@ Copy-Item .env.example .env
 
 Then fill in your real values locally.
 
+Single-model configuration:
+
+```env
+AI_MODEL_DIR=model_output_SINGLE_v4
+AI_MODEL_FILE=model_leakage_safe.pkl
+```
+
+`AI_MODEL_FILE` is optional if the default model file is present.
+
 ---
 
 ## Running with Docker Compose
 
 The main application is inside:
 
+```text
 ci-cd-security/
+```
 
 Before running Docker Compose, make sure the frontend production build exists:
 
+```powershell
 cd ci-cd-security/frontend-dashboard
 npm install
 npm run build
+```
 
 Then start the full application:
 
+```powershell
 cd ..
 docker compose up --build
+```
 
 Frontend:
 
+```text
 http://127.0.0.1:5173
+```
 
 Backend health endpoint:
 
+```text
 http://127.0.0.1:8000/api/health/
+```
 
-Note: the frontend Docker image serves the prebuilt frontend-dashboard/dist/ folder through Nginx.
+Note: the frontend Docker image serves the prebuilt `frontend-dashboard/dist/` folder through Nginx.
 
 ---
 
@@ -284,8 +302,8 @@ Recommended reading:
 |---|---|
 | architecture.md | Explains the full platform architecture |
 | security_fixes.md | Summarizes security fixes and audit response |
-| model_explanation.md | Explains the dual-model setup |
-| ai_vs_cvss_benchmark.md | Documents AI ranking vs CVSS-only ranking |
+| model_explanation.md | Explains the single v4 stacked AI risk model |
+| ai_vs_cvss_benchmark.md | Documents single v4 AI scoring vs CVSS-only ranking |
 
 ---
 
@@ -307,10 +325,12 @@ __pycache__/
 
 The final model artifact folders should be committed unless they are too large for GitHub. If `.pkl` files are too large, use Git LFS.
 
+When a model artifact or metadata file is changed, the matching `.sha256` file must also be regenerated and committed.
+
 ---
 
 ## Important limitation
 
 VulnPriority is a prioritization system, not a vulnerability detector.
 
-The scanners detect findings. DefectDojo stores them. The AI models help sort and explain which findings should be reviewed first. Final remediation decisions still require human security review.
+The scanners detect findings. DefectDojo stores them. The AI model helps sort and explain which findings should be reviewed first. Final remediation decisions still require human security review.
