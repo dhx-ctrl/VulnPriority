@@ -1,205 +1,141 @@
-# Architecture
+# VulnPriority Architecture
 
-## Overview
+This document describes the current VulnPriority architecture after the single-model v4 migration.
 
-VulnPriority is structured as a DevSecOps vulnerability prioritization platform.
+## System overview
+
+VulnPriority is a local DevSecOps security platform that collects vulnerability findings from CI/CD scanners and DefectDojo, enriches them with AI prioritization, stores the results in the backend database, and displays them in the React dashboard.
+
+The current system has one AI prioritization model:
+
+- **Model:** XGBoost stacked ensemble (v4)
+- **Model folder:** `backend-ai/model_output_SINGLE_v4/`
+- **Main decision threshold:** `0.386`
+- **Purpose:** predict exploitation-likelihood / high-risk priority for vulnerability triage.
+- **Output:** probability, score `/100`, risk label, binary high-risk decision, confidence indicator.
+
+The previous two-model design has been replaced. There is no longer a separate strict model and separate queue model in the active architecture.
+
+## High-level data flow
 
 ```text
-Target application repository
+GitHub Actions / scanner jobs
         |
-        | GitHub Actions / self-hosted runner
+        |  SAST / SCA / DAST reports
         v
-Scanner scripts
-  - Semgrep
-  - Trivy filesystem
-  - Trivy image
-  - OWASP ZAP baseline
+DefectDojo
         |
+        |  Product findings fetched through API
         v
-DefectDojo import / reimport
+FastAPI backend
         |
+        |  normalization + feature preparation
         v
-DefectDojo vulnerability database
+Single v4 AI model
         |
+        |  ai_probability, ai_risk_score, ai_risk_label,
+        |  ai_decision, ai_confidence
         v
-FastAPI backend sync
-        |
-        v
-AI scoring + SQLite cache
+SQLite / backend storage
         |
         v
 React dashboard
 ```
 
-## Repository structure
+## Repository layout
 
 ```text
 ci-cd-security/
 ├── backend-ai/
 │   ├── main.py
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   ├── .dockerignore
-│   ├── .env.example
-│   ├── model_output_FINAL_clean_minimal_features/
-│   └── model_output_EPSS_operational_ranker/
+│   ├── core/
+│   ├── database/
+│   ├── routers/
+│   ├── services/
+│   ├── schemas.py
+│   ├── model_output_SINGLE_v4/
+│   │   ├── model_leakage_safe.pkl
+│   │   ├── model_leakage_safe.pkl.sha256
+│   │   ├── model_meta.json
+│   │   ├── feature_columns.json
+│   │   ├── shap_feature_importance.csv
+│   │   └── threshold_comparison.csv
+│   └── training/
+│       ├── 03_train_leakage_safe_xgb.py
+│       └── osv_text_fetcher.py
 │
 ├── frontend-dashboard/
 │   ├── src/
-│   ├── package.json
-│   ├── Dockerfile
-│   ├── nginx.conf
-│   └── .env.example
+│   │   ├── components/
+│   │   │   ├── Layout.jsx
+│   │   │   └── ui/
+│   │   ├── context/
+│   │   ├── pages/
+│   │   └── services/
+│   └── package.json
 │
-├── scripts/
-│   ├── run_pipeline.sh
-│   ├── import_scans.sh
-│   ├── run_semgrep.sh
-│   ├── run_trivy_fs.sh
-│   ├── run_trivy_image.sh
-│   └── run_zap.sh
-│
-├── products/
-├── example-workflows/
 └── docs/
+    ├── architecture.md
+    ├── model_explanation.md
+    └── ai_vs_cvss_benchmark.md
 ```
 
-## Backend
+## Backend responsibilities
 
-The backend is a FastAPI service. Its main responsibilities are:
+The backend is responsible for:
 
-- authenticate dashboard users;
-- manage pending/approved/disabled dashboard users;
-- expose health and metadata endpoints;
-- synchronize findings from DefectDojo;
-- normalize scanner findings into model input features;
-- run the clean leakage-safe model and the operational EPSS ranker;
-- store scored findings in SQLite;
-- serve scored findings, products, trends, and notifications to the dashboard.
+1. Authenticating users and protecting API routes.
+2. Fetching products and findings from DefectDojo.
+3. Normalizing findings into a consistent schema.
+4. Preparing the feature columns expected by the model.
+5. Loading the single v4 AI model from `model_output_SINGLE_v4`.
+6. Verifying model artifact hashes before loading.
+7. Producing AI outputs for every finding.
+8. Storing scored findings locally.
+9. Serving the dashboard, model metadata, findings, and sync status through FastAPI endpoints.
 
-The backend loads two model folders:
+## AI output fields
 
-```text
-backend-ai/model_output_FINAL_clean_minimal_features/
-backend-ai/model_output_EPSS_operational_ranker/
-```
-
-Each model folder contains:
-
-```text
-model_leakage_safe.pkl
-model_leakage_safe.pkl.sha256
-model_meta.json
-model_meta.json.sha256
-feature_columns.json
-feature_columns.json.sha256
-```
-
-The SHA-256 files are verified before loading the model artifacts.
-
-## Frontend
-
-The frontend is a Vite React dashboard. It includes:
-
-- Login page
-- Registration page
-- Pending access page
-- Dashboard overview
-- Findings table
-- Scan history
-- Model insights
-- Summary
-- Sync page
-- Parameters page
-- Admin Users page
-
-The dashboard uses the backend API through:
-
-```text
-frontend-dashboard/src/services/api-client.js
-```
-
-The dashboard displays four main finding concepts:
+The active dashboard should use the following fields from the AI layer:
 
 | Field | Meaning |
 |---|---|
-| Scanner severity | Original severity from scanner or DefectDojo |
-| CVSS | Standard severity baseline |
-| Rank /100 | Operational EPSS ranker score used for queue ordering |
-| Clean /100 | Leakage-safe model confidence signal |
+| `ai_probability` | Raw model probability for high-risk/exploitation-likelihood. Best ranking field. |
+| `ai_risk_score` | Rounded score from 0 to 100 for display. |
+| `ai_risk_label` | Human-readable label such as Low, Medium, High, or Critical. |
+| `ai_decision` | Boolean high-risk decision based on the selected threshold. |
+| `ai_confidence` | Confidence bucket based on distance from the threshold. |
 
-## CI/CD scanning scripts
+Scanner severity and CVSS remain visible, but they are treated as separate evidence rather than the final priority decision.
 
-The scripts folder handles scanner orchestration and DefectDojo import.
+## Frontend responsibilities
 
-Main flow:
+The frontend is a Vite + React dashboard. It reads backend data through `src/services/api-client.js` and displays:
 
-```text
-run_pipeline.sh
-    -> run_semgrep.sh
-    -> run_trivy_fs.sh
-    -> run_trivy_image.sh
-    -> start_app.sh / wait_for_app.sh / run_zap.sh
-    -> import_scans.sh
-```
+- total findings,
+- severity distribution,
+- findings grouped by product,
+- review queue,
+- model status,
+- sync status,
+- user/admin pages.
 
-`import_scans.sh` resolves or creates:
+Reusable UI elements were moved into `src/components/ui/` to keep page files shorter and reduce duplicated card/badge/table styling.
 
-- product type;
-- product;
-- engagement;
-- test;
-- import or reimport operation.
+## Deployment notes
 
-This makes CI/CD imports repeatable and avoids manual DefectDojo setup for every run.
-
-## DefectDojo integration
-
-The backend communicates with DefectDojo using:
+For local PowerShell execution, the backend can use:
 
 ```env
-DEFECTDOJO_URL
-DEFECTDOJO_API_KEY
-DEFECTDOJO_PRODUCT_ID
+DEFECTDOJO_URL=http://127.0.0.1:8080
+AI_MODEL_DIR=model_output_SINGLE_v4
 ```
 
-When a sync is triggered, the backend pulls findings from DefectDojo, scores them, and stores them locally in SQLite.
+For backend execution inside Docker while DefectDojo runs on the host, use:
 
-SQLite is used as a local runtime cache, not as the source of truth. DefectDojo remains the central finding source.
-
-## Docker architecture
-
-The project can be started with Docker Compose:
-
-```text
-docker-compose.yml
-    -> backend-ai service
-    -> frontend-dashboard service
+```env
+DEFECTDOJO_URL=http://host.docker.internal:8080
+AI_MODEL_DIR=model_output_SINGLE_v4
 ```
 
-The backend exposes port `8000`.
-
-The frontend is built with Vite and served by Nginx on port `5173`.
-
-## Runtime data
-
-The following files are runtime/local and should not be committed:
-
-```text
-backend-ai/.env
-backend-ai/ai_scores.db
-frontend-dashboard/dist/
-frontend-dashboard/node_modules/
-```
-
-The following files are safe to commit:
-
-```text
-backend-ai/.env.example
-frontend-dashboard/.env.example
-docker-compose.yml
-Dockerfile files
-source code
-model artifact folders
-documentation
-```
+Generated folders such as `dist/`, `node_modules/`, `.venv/`, `.env`, and local database files should not be committed.

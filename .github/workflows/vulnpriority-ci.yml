@@ -110,8 +110,7 @@ jobs:
           DEFECTDOJO_API_KEY=${CI_DEFECTDOJO_API_KEY}
           DEFECTDOJO_PRODUCT_ID=${CI_DEFECTDOJO_PRODUCT_ID}
           DASHBOARD_ORIGINS=${CI_DASHBOARD_ORIGINS}
-          AI_CLEAN_MODEL_DIR=model_output_FINAL_clean_minimal_features
-          AI_RANKER_MODEL_DIR=model_output_EPSS_operational_ranker
+          AI_MODEL_DIR=model_output_SINGLE_v4
           EOF
 
       - name: Validate Docker Compose file

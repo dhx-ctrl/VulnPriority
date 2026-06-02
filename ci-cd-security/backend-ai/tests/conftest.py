@@ -42,11 +42,8 @@ def test_env(tmp_path_factory, backend_dir):
     os.environ["DEFECTDOJO_API_KEY"] = "dummy-test-key"
     os.environ["DEFECTDOJO_PRODUCT_ID"] = ""
 
-    os.environ["AI_CLEAN_MODEL_DIR"] = str(
-        backend_dir / "model_output_FINAL_clean_minimal_features"
-    )
-    os.environ["AI_RANKER_MODEL_DIR"] = str(
-        backend_dir / "model_output_EPSS_operational_ranker"
+    os.environ["AI_MODEL_DIR"] = str(
+    backend_dir / "model_output_SINGLE_v4"
     )
 
     # Make sure tests can import backend-ai/main.py even when pytest is run

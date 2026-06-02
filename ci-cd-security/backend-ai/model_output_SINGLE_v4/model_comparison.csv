@@ -1,0 +1,6 @@
+model,precision,recall,f1,f1_macro,roc_auc,aucpr
+"OLD (fixed params, target-precision thr)",0.7076,0.5261,0.6035,0.769,0.9022,0.7354
+NEW (stacked: XGB+RF+LogReg),0.7098,0.5957,0.6478,0.7929,0.9056,0.7387
+Random Forest,0.4725,0.7478,0.5791,0.7336,0.9037,0.7255
+Logistic Regression,0.4396,0.7913,0.5652,0.7185,0.8859,0.7158
+CVSS baseline (cvss>=9.0),0.4049,0.4348,0.4193,0.6507,0.7847,

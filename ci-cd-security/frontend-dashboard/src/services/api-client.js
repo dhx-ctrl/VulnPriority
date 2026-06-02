@@ -6,11 +6,11 @@
 //   3. <meta name="vulnpriority-api-base-url" content="...">
 //   4. default local prototype URL: http://127.0.0.1:8000
 //
-// Dual-model frontend normalization:
-//   - operational_rank_score is the primary dashboard sorting / queue-priority score.
-//   - clean_ai_score is the strict leakage-safe confidence signal.
-//   - legacy risk_score / risk_category / is_high_risk are kept as aliases for
-//     the operational ranker so older pages do not break.
+// Single-model frontend normalization:
+//   - ai_probability is the primary ranking key.
+//   - ai_risk_score is the 0-100 display score.
+//   - ai_risk_label / ai_decision / ai_confidence drive the analyst workflow.
+//   - legacy risk_score / operational_* / clean_* aliases are still accepted for old cached rows.
 
 (function initApiConfig() {
   function cleanBaseUrl(value) {
@@ -122,9 +122,9 @@ function _bool(value) {
   return ['1', 'true', 'yes', 'y'].includes(s);
 }
 
-const OPERATIONAL_PRIORITY = {
-  REVIEW_FIRST_MIN: 20,
-  REVIEW_SOON_MIN: 10,
+const AI_PRIORITY = {
+  REVIEW_FIRST_MIN: 39,   // probability >= 0.386 rounded to /100
+  REVIEW_SOON_MIN: 20,    // probability >= 0.194 rounded to /100
 };
 
 function _scoreCategory(score) {
@@ -134,10 +134,34 @@ function _scoreCategory(score) {
   return 'Low';
 }
 
-function _operationalScoreCategory(score) {
+function _aiScoreCategory(score) {
   const n = _num(score, 0);
-  if (n >= OPERATIONAL_PRIORITY.REVIEW_FIRST_MIN) return 'High';
-  if (n >= OPERATIONAL_PRIORITY.REVIEW_SOON_MIN) return 'Medium';
+  if (n >= AI_PRIORITY.REVIEW_FIRST_MIN) return 'High';
+  if (n >= AI_PRIORITY.REVIEW_SOON_MIN) return 'Medium';
+  return 'Low';
+}
+
+
+function _normalizeAiRiskLabel(value, score = 0) {
+  const normalized = String(value || '').trim().toUpperCase();
+
+  if (normalized === 'CRITICAL') return 'Critical';
+  if (normalized === 'HIGH') return 'High';
+  if (normalized === 'MEDIUM') return 'Medium';
+  if (normalized === 'LOW') return 'Low';
+  return _aiScoreCategory(score);
+}
+
+function _normalizeAiConfidence(value, probability = 0) {
+  const normalized = String(value || '').trim().toUpperCase();
+
+  if (normalized === 'HIGH') return 'High';
+  if (normalized === 'MEDIUM') return 'Medium';
+  if (normalized === 'LOW') return 'Low';
+
+  const distance = Math.abs(_num(probability, 0) - 0.386);
+  if (distance >= 0.30) return 'High';
+  if (distance >= 0.15) return 'Medium';
   return 'Low';
 }
 
@@ -151,20 +175,17 @@ function _scannerSeverityRank(sev) {
 }
 
 function _buildPriorityTier(f) {
-  const opScore = _num(f.operational_rank_score ?? f.risk_score, 0);
+  const aiScore = _num(f.ai_risk_score ?? f.risk_score ?? f.operational_rank_score, 0);
+  const aiDecision = _bool(f.ai_decision ?? f.is_high_risk ?? f.operational_is_high_risk ?? f.clean_is_high_risk);
   const scannerRank = _scannerSeverityRank(
     f.scanner_severity || f.severity || f.defectdojo_severity
   );
 
-  // The operational ranker is a queue-ranking model.
-  // Use raw Rank /100 bands for priority labels; do not force priority
-  // using percentile alone, otherwise every sync will always create
-  // artificial "Review First" findings even when absolute rank is low.
-  if (f.operational_is_high_risk || opScore >= OPERATIONAL_PRIORITY.REVIEW_FIRST_MIN) {
+  if (aiDecision || aiScore >= AI_PRIORITY.REVIEW_FIRST_MIN) {
     return 'Review First';
   }
 
-  if (f.clean_is_high_risk || opScore >= OPERATIONAL_PRIORITY.REVIEW_SOON_MIN) {
+  if (aiScore >= AI_PRIORITY.REVIEW_SOON_MIN) {
     return 'Review Soon';
   }
 
@@ -189,12 +210,12 @@ function _buildNextAction(f) {
   }
 }
 
-window._assignOperationalPercentiles = function (items) {
+window._assignAiPercentiles = function (items) {
   if (!Array.isArray(items) || items.length === 0) return [];
 
   const sorted = [...items]
     .map((item, index) => ({ item, index }))
-    .sort((a, b) => _num(b.item.operational_rank_score, 0) - _num(a.item.operational_rank_score, 0));
+    .sort((a, b) => _num(b.item.ai_probability ?? b.item.exploit_probability ?? b.item.risk_score, 0) - _num(a.item.ai_probability ?? a.item.exploit_probability ?? a.item.risk_score, 0));
 
   const n = sorted.length;
   const byOriginalIndex = new Map();
@@ -224,6 +245,8 @@ window._assignOperationalPercentiles = function (items) {
 
   return items.map((_, index) => byOriginalIndex.get(index));
 };
+
+window._assignOperationalPercentiles = window._assignAiPercentiles;
 
 window._normalizeScore = function (r) {
   let raw = {};
@@ -278,34 +301,46 @@ window._normalizeScore = function (r) {
     r.predicted_severity ||
     'Medium';
 
-  const cleanScore = _nullableNum(r.clean_ai_score);
-  const cleanExploitProbability = _nullableNum(r.clean_exploit_probability);
-
-  const operationalRankScore =
-    _nullableNum(r.operational_rank_score) ??
-    _nullableNum(r.risk_score) ??
+  const aiProbability =
+    _nullableNum(r.ai_probability) ??
+    _nullableNum(r.exploit_probability) ??
+    _nullableNum(r.operational_exploit_probability) ??
+    _nullableNum(r.clean_exploit_probability) ??
     0;
 
-  const operationalExploitProbability =
-    _nullableNum(r.operational_exploit_probability) ??
-    _nullableNum(r.exploit_probability) ??
-    (operationalRankScore / 100);
+  const aiRiskScore =
+    _nullableNum(r.ai_risk_score) ??
+    _nullableNum(r.risk_score) ??
+    _nullableNum(r.operational_rank_score) ??
+    _nullableNum(r.clean_ai_score) ??
+    Math.round(aiProbability * 100);
 
-  const operationalCategory =
-    r.operational_rank_category ||
-    r.risk_category ||
-    _operationalScoreCategory(operationalRankScore);
+  const aiRiskLabel = _normalizeAiRiskLabel(
+    r.ai_risk_label ||
+      r.risk_category ||
+      r.operational_rank_category ||
+      r.clean_ai_category,
+    aiRiskScore,
+  );
 
-  const cleanCategory =
-    r.clean_ai_category ||
-    (cleanScore === null ? null : _scoreCategory(cleanScore));
+  const aiDecision =
+    r.ai_decision !== undefined && r.ai_decision !== null && r.ai_decision !== ''
+      ? _bool(r.ai_decision)
+      : (r.is_high_risk !== undefined && r.is_high_risk !== null && r.is_high_risk !== ''
+          ? _bool(r.is_high_risk)
+          : _bool(r.operational_is_high_risk ?? r.clean_is_high_risk));
 
-  const operationalIsHighRisk =
-    r.operational_is_high_risk !== undefined && r.operational_is_high_risk !== null && r.operational_is_high_risk !== ''
-      ? _bool(r.operational_is_high_risk)
-      : _bool(r.is_high_risk);
+  const aiConfidence = _normalizeAiConfidence(r.ai_confidence, aiProbability);
 
-  const cleanIsHighRisk = _bool(r.clean_is_high_risk);
+  // Compatibility aliases for old table components and old cached rows.
+  const operationalRankScore = aiRiskScore;
+  const operationalExploitProbability = aiProbability;
+  const operationalCategory = aiRiskLabel;
+  const operationalIsHighRisk = aiDecision;
+  const cleanScore = aiRiskScore;
+  const cleanExploitProbability = aiProbability;
+  const cleanCategory = aiRiskLabel;
+  const cleanIsHighRisk = aiDecision;
 
   const normalized = {
     id:                    r.id,
@@ -314,10 +349,16 @@ window._normalizeScore = function (r) {
     scanner_type:          scannerType,
     cvss_score:            _num(r.cvss_score, 0),
 
-    risk_score:            operationalRankScore,
-    risk_category:         operationalCategory,
-    is_high_risk:          operationalIsHighRisk,
-    exploit_probability:   operationalExploitProbability,
+    ai_probability:        aiProbability,
+    ai_risk_score:         aiRiskScore,
+    ai_risk_label:         aiRiskLabel,
+    ai_decision:           aiDecision,
+    ai_confidence:         aiConfidence,
+
+    risk_score:            aiRiskScore,
+    risk_category:         aiRiskLabel,
+    is_high_risk:          aiDecision,
+    exploit_probability:   aiProbability,
 
     clean_ai_score:            cleanScore,
     clean_ai_category:         cleanCategory,
@@ -353,8 +394,8 @@ window._normalizeScore = function (r) {
     file_path:             filePath,
 
     priority_tier:         null,
-    fix_recommendation:    'Review according to operational rank, clean AI flag, CVSS, and scanner severity',
-    next_action:           'Review according to operational rank',
+    fix_recommendation:    'Review according to AI score, confidence, CVSS, and scanner severity',
+    next_action:           'Review according to AI risk score',
   };
 
   normalized.priority_tier = _buildPriorityTier(normalized);
@@ -500,7 +541,7 @@ window.ApiClient = {
       const rows = await readJsonOrText(res);
 
       const normalized = Array.isArray(rows) ? rows.map(window._normalizeScore) : [];
-      return window._assignOperationalPercentiles(normalized);
+      return window._assignAiPercentiles(normalized);
     } catch (e) {
       console.warn('Scores fetch failed:', e);
       return [];

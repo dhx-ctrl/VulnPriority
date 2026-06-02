@@ -1,0 +1,265 @@
+{
+  "model_type": "XGBoost stacked ensemble (v4)",
+  "created_at_utc": "2026-05-23T20:00:06.900762+00:00",
+  "input_file": "D:\\LEAI\\merged_trainable.csv",
+  "real_text_features": true,
+  "sample_weights": true,
+  "tuned": true,
+  "tune_objective": "aucpr",
+  "stacked": true,
+  "n_trials": 60,
+  "cv_folds": 4,
+  "best_params": {
+    "max_depth": 4,
+    "learning_rate": 0.17254716573280354,
+    "subsample": 0.892797576724562,
+    "colsample_bytree": 0.8394633936788146,
+    "min_child_weight": 2,
+    "reg_lambda": 0.032729742670534204,
+    "reg_alpha": 0.0017073967431528124,
+    "gamma": 1.599409170128044,
+    "scale_pos_weight": 3.404460046972835
+  },
+  "n_estimators_early_stopping": 55,
+  "per_fold_best_iteration": [
+    60,
+    37,
+    50,
+    73
+  ],
+  "threshold_strategy": "f1",
+  "fbeta": 2.0,
+  "chosen_threshold": 0.386,
+  "threshold_table": {
+    "f1": {
+      "threshold": 0.3874064908830538
+    },
+    "fbeta": {
+      "threshold": 0.095,
+      "beta": 2.0
+    },
+    "f1_macro": {
+      "threshold": 0.49500000000000005
+    },
+    "youden": {
+      "threshold": 0.15053047109031742
+    },
+    "target_precision": {
+      "threshold": 0.38093247220339943
+    }
+  },
+  "recommended_operating_points": {
+    "balanced_default": {
+      "threshold": 0.386,
+      "rationale": "max F1 on OOF; also maximizes F1-macro and MCC. Best single-number balance.",
+      "test": {
+        "threshold": 0.386,
+        "accuracy": 0.8946251768033946,
+        "precision": 0.7098445595854922,
+        "recall": 0.5956521739130435,
+        "f1": 0.6477541371158393,
+        "f1_macro": 0.7928999375807887,
+        "mcc": 0.5894744593568767,
+        "balanced_accuracy": 0.7741774383078731,
+        "aucpr": 0.7386515971249595,
+        "roc_auc": 0.9055743243243244,
+        "tn": 1128,
+        "fp": 56,
+        "fn": 93,
+        "tp": 137
+      }
+    },
+    "high_recall_mode": {
+      "threshold": 0.194,
+      "rationale": "max F-beta(1.5) on OOF; favours catching exploitable vulns (recall) at the cost of more false positives. Use when a missed vuln is much worse than a FP.",
+      "test": {
+        "threshold": 0.194,
+        "accuracy": 0.8408769448373409,
+        "precision": 0.5074626865671642,
+        "recall": 0.7391304347826086,
+        "f1": 0.6017699115044248,
+        "f1_macro": 0.7511721850937945,
+        "mcc": 0.5205866981859013,
+        "balanced_accuracy": 0.7998861633372503,
+        "aucpr": 0.7386515971249595,
+        "roc_auc": 0.9055743243243244,
+        "tn": 1019,
+        "fp": 165,
+        "fn": 60,
+        "tp": 170
+      }
+    }
+  },
+  "new_model_test_metrics": {
+    "threshold": 0.386,
+    "accuracy": 0.8946251768033946,
+    "precision": 0.7098445595854922,
+    "recall": 0.5956521739130435,
+    "f1": 0.6477541371158393,
+    "f1_macro": 0.7928999375807887,
+    "mcc": 0.5894744593568767,
+    "balanced_accuracy": 0.7741774383078731,
+    "aucpr": 0.7386515971249595,
+    "roc_auc": 0.9055743243243244,
+    "tn": 1128,
+    "fp": 56,
+    "fn": 93,
+    "tp": 137
+  },
+  "old_model_test_metrics": {
+    "threshold": 0.34778422117233276,
+    "accuracy": 0.8875530410183875,
+    "precision": 0.7076023391812866,
+    "recall": 0.5260869565217391,
+    "f1": 0.6034912718204489,
+    "f1_macro": 0.768989146417023,
+    "mcc": 0.5476755860608219,
+    "balanced_accuracy": 0.7419286133960047,
+    "aucpr": 0.7353982624166057,
+    "roc_auc": 0.9021592244418332,
+    "tn": 1134,
+    "fp": 50,
+    "fn": 109,
+    "tp": 121
+  },
+  "comparison": [
+    {
+      "model": "OLD (fixed params, target-precision thr)",
+      "precision": 0.7076,
+      "recall": 0.5261,
+      "f1": 0.6035,
+      "f1_macro": 0.769,
+      "roc_auc": 0.9022,
+      "aucpr": 0.7354
+    },
+    {
+      "model": "NEW (stacked: XGB+RF+LogReg)",
+      "precision": 0.7098,
+      "recall": 0.5957,
+      "f1": 0.6478,
+      "f1_macro": 0.7929,
+      "roc_auc": 0.9056,
+      "aucpr": 0.7387
+    },
+    {
+      "model": "Random Forest",
+      "precision": 0.4725,
+      "recall": 0.7478,
+      "f1": 0.5791,
+      "f1_macro": 0.7336,
+      "roc_auc": 0.9037,
+      "aucpr": 0.7255
+    },
+    {
+      "model": "Logistic Regression",
+      "precision": 0.4396,
+      "recall": 0.7913,
+      "f1": 0.5652,
+      "f1_macro": 0.7185,
+      "roc_auc": 0.8859,
+      "aucpr": 0.7158
+    },
+    {
+      "model": "CVSS baseline (cvss>=9.0)",
+      "precision": 0.4049,
+      "recall": 0.4348,
+      "f1": 0.4193,
+      "f1_macro": 0.6507,
+      "roc_auc": 0.7847,
+      "aucpr": null
+    }
+  ],
+  "cvss_baseline": {
+    "available": true,
+    "rows_with_cvss": 1098,
+    "auc_cvss_as_score": 0.7847347527968243,
+    "cvss_ge_7.0": {
+      "precision": 0.21944035346097202,
+      "recall": 0.6478260869565218,
+      "f1": 0.3278327832783278,
+      "f1_macro": 0.5047188929419257
+    },
+    "cvss_ge_8.0": {
+      "precision": 0.3181818181818182,
+      "recall": 0.5173913043478261,
+      "f1": 0.39403973509933776,
+      "f1_macro": 0.6147356948877984
+    },
+    "cvss_ge_9.0": {
+      "precision": 0.4048582995951417,
+      "recall": 0.43478260869565216,
+      "f1": 0.4192872117400419,
+      "f1_macro": 0.6507325042111524
+    }
+  },
+  "rows_loaded": 7114,
+  "rows_used": 7114,
+  "positive_rate": 0.16432386842845095,
+  "split_kind": "group",
+  "feature_columns": [
+    "package_name",
+    "published_year",
+    "days_since_published",
+    "days_since_modified",
+    "ranges_count",
+    "versions_count",
+    "summary_len",
+    "details_len",
+    "references_count",
+    "github_reviewed",
+    "has_patch_ref",
+    "has_advisory_ref",
+    "scanner_type",
+    "is_static",
+    "is_dynamic",
+    "feat_cwe_family",
+    "feat_has_cwe",
+    "feat_cwe_tier",
+    "feat_text_len",
+    "feat_word_count",
+    "feat_kw_unauth",
+    "feat_kw_remote",
+    "feat_kw_rce",
+    "feat_kw_no_interaction",
+    "feat_kw_priv_esc",
+    "feat_kw_injection",
+    "feat_kw_deserialize",
+    "feat_kw_bypass",
+    "feat_kw_overflow",
+    "feat_kw_disclosure",
+    "feat_kw_dos",
+    "feat_kw_prototype",
+    "feat_kw_path",
+    "feat_danger_kw_count",
+    "feat_published_year",
+    "feat_modified_year",
+    "feat_withdrawn_year",
+    "feat_days_since_published",
+    "feat_days_since_modified",
+    "feat_references_count",
+    "feat_ranges_count",
+    "feat_versions_count",
+    "feat_github_reviewed",
+    "feat_has_patch_ref",
+    "feat_has_advisory_ref",
+    "feat_is_static",
+    "feat_is_dynamic",
+    "feat_package_len",
+    "feat_is_scoped_package",
+    "feat_package_scope",
+    "feat_scanner_type"
+  ],
+  "leakage_controls": [
+    "EPSS/CVSS/severity build label only, never features",
+    "label-availability proxies removed",
+    "test split off first, scored once",
+    "grouped CV, preprocessor refit per fold",
+    "threshold + stack meta-learner from OOF predictions",
+    "sample weights from label-construction signals, train-only"
+  ],
+  "shap_artifacts": {
+    "beeswarm": "model_output_final\\shap_summary_beeswarm.png",
+    "bar": "model_output_final\\shap_importance_bar.png",
+    "csv": "model_output_final\\shap_feature_importance.csv"
+  }
+}
