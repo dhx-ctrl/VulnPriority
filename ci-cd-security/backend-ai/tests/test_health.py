@@ -1,15 +1,12 @@
 def test_health_endpoint_returns_ok(client):
-    response = client.get("/api/health/")
-
-    assert response.status_code == 200, response.text
+    response = client.get("/api/health")
+    assert response.status_code == 200
 
     data = response.json()
 
-    assert data.get("status") == "ok"
+    assert "auth" in data
+    assert "db" in data
 
-    # The exact health payload can evolve, but it should expose backend/model state.
-    assert "db" in data or "models" in data or "binary_model" in data
-
-    if "models" in data:
-        assert "clean" in data["models"]
-        assert "operational_ranker" in data["models"]
+    assert data["auth"]["configured"] is True
+    assert data["auth"]["dashboard_login"] is True
+    assert data["auth"]["header"] == "X-API-Key"

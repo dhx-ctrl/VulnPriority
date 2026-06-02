@@ -1,4 +1,4 @@
-def test_risk_score_endpoint_returns_dual_model_scores(client, auth_headers):
+def test_risk_score_endpoint_returns_single_model_scores(client, auth_headers):
     payload = {
         "cve_id": "CVE-2021-23337",
         "year": 2021,

@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 # Local development usually wants .env to win. In Docker Compose, set
 # DOTENV_OVERRIDE=false if you want Compose environment variables to win.
-DOTENV_OVERRIDE = os.getenv("DOTENV_OVERRIDE", "true").strip().lower() in {"1", "true", "yes", "on"}
+DOTENV_OVERRIDE = os.getenv("DOTENV_OVERRIDE", "false").strip().lower() in {"1", "true", "yes", "on"}
 load_dotenv(override=DOTENV_OVERRIDE)
 
 logging.basicConfig(
